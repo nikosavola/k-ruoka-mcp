@@ -69,19 +69,39 @@ jobs:
           TAG: ${{ steps.get_version.outputs.tag }}
           VERSION: ${{ steps.get_version.outputs.version }}
         run: |
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG"; then
-            echo "Tag $TAG already exists. No new release will be created."
-            echo "new_tag=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Tag $TAG does not exist. Creating and pushing it."
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git remote set-url origin \
-              "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
-            git tag -a "$TAG" -m "Release $VERSION"
-            git push origin "$TAG"
-            echo "new_tag=true" >> "$GITHUB_OUTPUT"
-          fi
+          # Credentials first: persist-credentials is off, so an unauthenticated
+          # ls-remote against a private repo fails asking for a username, and the exit
+          # status alone cannot tell that apart from "no such tag".
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null
+          lookup=$?
+          set -e
+          # --exit-code documents 2 for "no matching refs". Anything else is a real
+          # failure, and treating one as "tag absent" would tag and publish a release
+          # that may already exist.
+          case "$lookup" in
+            0)
+              echo "Tag $TAG already exists. No new release will be created."
+              echo "new_tag=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            2) echo "Tag $TAG does not exist. Creating and pushing it." ;;
+            *)
+              echo "::error::could not read tags from origin (git ls-remote exit $lookup)"
+              exit 1
+              ;;
+          esac
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # -f because a stale local tag of the same name can arrive with fetch-depth: 0
+          # while the remote has none. The remote is the authority, and it just said no.
+          git tag -fa "$TAG" -m "Release $VERSION"
+          git push origin "$TAG"
+          echo "new_tag=true" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build
