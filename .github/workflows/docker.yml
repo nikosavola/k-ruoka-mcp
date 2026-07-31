@@ -1,6 +1,13 @@
 # Builds the Docker image and pushes it to GHCR (ghcr.io) only. Deliberately not Docker
 # Hub: GHCR authenticates with GITHUB_TOKEN, so there is no separate account or secret to
 # manage, and the image lives next to the code as a repository package.
+#
+# Each architecture is built on a runner of that architecture, then the two are joined
+# into one manifest list. The obvious alternative, one job emulating arm64 through QEMU,
+# does work but has to compile the whole Rust dependency tree under emulation: the first
+# attempt was cancelled after 25 minutes still inside `cargo build`. `ubuntu-24.04-arm`
+# runners are free for public repositories, and `build.yml` already uses one for the
+# aarch64 wheel, so there is nothing to emulate.
 name: docker
 
 on:
@@ -20,7 +27,10 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Spelled out rather than composed from REGISTRY, since one env entry cannot reference
+  # another. Abbreviated because the `outputs:` line below is a comma-separated list that
+  # cannot be wrapped: any wrap inserts a space, which buildx reads as part of a key.
+  IMG: ghcr.io/${{ github.repository }}
 
 permissions: {}
 
@@ -29,9 +39,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-push:
-    name: Build and push
-    runs-on: ubuntu-latest
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Both architectures are reported separately: knowing arm64 broke while amd64
+      # built is the whole point of splitting them.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       # The only credential this needs: GHCR authenticates with GITHUB_TOKEN, scoped to
@@ -42,9 +62,72 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          platforms: arm64
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same tag rules as the merge job below, even though nothing here is tagged:
+      # they decide the org.opencontainers.image.version label baked into each image, and
+      # without them it falls back to the branch name.
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta
+        with:
+          images: ${{ env.IMG }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      # Pushed by digest, with no tag: a tag here would be claimed by whichever
+      # architecture finished last instead of naming both. The merge job applies the tags
+      # to the manifest list that lists both digests.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMG }},push-by-digest=true,name-canonical=true,push=true
+          # Scoped per architecture, or the two jobs would evict each other's layers.
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      # The digest is the only thing the merge job needs, and an empty file named after
+      # it carries it without any parsing on the other side.
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+          # Re-running the workflow keeps the previous attempt's artifacts, and uploading
+          # the same name twice is an error, so "Re-run all jobs" would fail here. That is
+          # the recovery path for a merge job that failed on a transient registry error.
+          overwrite: true
+
+  merge:
+    name: Join the architectures
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -57,17 +140,28 @@ jobs:
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMG }}
           tags: |
-            type=raw,value=latest
+            # Only from the default branch. workflow_dispatch runs on any ref, and an
+            # ungated `latest` let a dispatch on a branch quietly replace the image the
+            # README tells people to pull.
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
 
-      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # The tags come out of metadata-action's own JSON rather than being rebuilt here, so
+      # the two cannot drift.
+      - name: Create the manifest list
+        working-directory: /tmp/digests
+        run: |
+          # shellcheck disable=SC2046 # word splitting is how the arguments are formed
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${IMG}@sha256:%s " *)
+
+      - name: Show what was published
+        env:
+          # The tag this run actually created, not `latest`: that one is only published
+          # from the default branch, so inspecting it after a branch dispatch would report
+          # some earlier image and prove nothing about this run.
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "${IMG}:${VERSION}"
