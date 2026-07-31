@@ -22,6 +22,16 @@ use tokio::task::JoinHandle;
 pub const SHOP_URL: &str = "https://www.k-ruoka.fi/kauppa";
 pub const SHOP_ORIGIN: &str = "https://www.k-ruoka.fi";
 
+/// `starts_with(SHOP_ORIGIN)` also accepts `www.k-ruoka.fi.example.net` and
+/// `www.k-ruoka.fi@evil.example`, so the next character has to be a boundary. No URL
+/// parser needed: this is Chrome's own serialized URL, already normalized.
+fn on_shop_origin(url: &str) -> bool {
+    match url.strip_prefix(SHOP_ORIGIN) {
+        Some(rest) => rest.is_empty() || rest.starts_with(['/', '?', '#']),
+        None => false,
+    }
+}
+
 /// A refusal: we are being turned away and waiting will not change that.
 ///
 /// `Pyyntö estetty` ("request blocked") is K-Ruoka's own WAF page; `Attention
@@ -441,12 +451,8 @@ impl Session {
             // Cheap liveness probe: a dead browser fails this, a live one on the
             // wrong URL just needs re-navigating.
             match live.page.url().await {
-                // Prefix, not `contains`. A substring test accepts anything merely
-                // *mentioning* the domain -- `login.kesko.fi/?redirect=k-ruoka.fi` is
-                // the realistic one, since signing in goes exactly there. That would
-                // skip the re-navigation and then run the same-origin fetch against
-                // the wrong origin, surfacing as an inexplicable HTML 404.
-                Ok(Some(url)) if url.starts_with(SHOP_ORIGIN) => return Ok(()),
+                // Prefix alone would accept `www.k-ruoka.fi.example.net` as arrived.
+                Ok(Some(url)) if on_shop_origin(&url) => return Ok(()),
                 Ok(_) => {
                     // Tear the browser down if re-navigating fails. Leaving a blocked
                     // one in the slot is what broke the relaunch: `attempt_once` has
@@ -1568,5 +1574,28 @@ mod tests {
             .trim_end_matches(')');
         let parsed: serde_json::Value = serde_json::from_str(json).expect("valid JSON literal");
         assert_eq!(parsed[0]["itemId"], hostile);
+    }
+
+    /// The lookalikes start with `SHOP_ORIGIN`, so a prefix match accepts every one.
+    #[test]
+    fn only_urls_actually_on_the_shop_origin_pass() {
+        let cases: &[(&str, bool)] = &[
+            ("https://www.k-ruoka.fi", true),
+            (SHOP_URL, true),
+            ("https://www.k-ruoka.fi/kauppa?x=1", true),
+            ("https://www.k-ruoka.fi/kauppa#section", true),
+            ("https://www.k-ruoka.fi.example.net/kauppa", false),
+            ("https://www.k-ruoka.film/", false),
+            ("https://www.k-ruoka.fi:9222/", false),
+            ("https://www.k-ruoka.fi@evil.example/kauppa", false),
+            (
+                "https://login.kesko.fi/?redirect=https://www.k-ruoka.fi",
+                false,
+            ),
+            ("http://www.k-ruoka.fi", false),
+        ];
+        for (url, expected) in cases {
+            assert_eq!(on_shop_origin(url), *expected, "url: {url}");
+        }
     }
 }
