@@ -363,7 +363,10 @@ impl Live {
 pub struct Session {
     profile: PathBuf,
     mode: LaunchMode,
-    user_agent: String,
+    /// Derived on first use, not in `new`. Deriving it reads Chrome's version, and
+    /// doing that eagerly put a Chrome probe in front of `serve`'s startup, which is
+    /// meant to be instant and to not need Chrome at all until a tool is called.
+    user_agent: std::sync::OnceLock<String>,
     live: Mutex<Option<Live>>,
     /// Set by [`Session::close`]. Stops a tool call that is still running from
     /// launching a browser the process is about to abandon.
@@ -390,7 +393,7 @@ impl Session {
         Ok(Self {
             profile,
             mode,
-            user_agent: user_agent()?,
+            user_agent: std::sync::OnceLock::new(),
             live: Mutex::new(None),
             closed: AtomicBool::new(false),
             login_in_progress: AtomicBool::new(false),
@@ -407,8 +410,15 @@ impl Session {
     /// real shop. The spike prints it so a reader can see *why* the page loaded, and
     /// so a regression in `user_agent()` shows up as evidence rather than as a bare
     /// "Cloudflare blocked us".
-    pub fn user_agent(&self) -> &str {
-        &self.user_agent
+    pub fn user_agent(&self) -> Result<&str> {
+        if let Some(ua) = self.user_agent.get() {
+            return Ok(ua);
+        }
+        // Two callers racing here both derive the same string, and `get_or_init` keeps
+        // whichever lands first. Failure is deliberately not cached: a missing Chrome is
+        // worth retrying once the user installs one.
+        let derived = user_agent()?;
+        Ok(self.user_agent.get_or_init(|| derived))
     }
 
     /// Seed or clear the cached `X-K-Build-Number`.
@@ -481,7 +491,7 @@ impl Session {
         let config = builder
             .disable_default_args()
             .args(CHROME_ARGS.iter().copied())
-            .arg(format!("user-agent={}", self.user_agent))
+            .arg(format!("user-agent={}", self.user_agent()?))
             .window_size(1440, 900)
             .build()
             .map_err(|e| anyhow::anyhow!("building BrowserConfig: {e}"))?;

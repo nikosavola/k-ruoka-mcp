@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     // for the finding is in the output, not just its consequence -- and so
     // `K_RUOKA_USER_AGENT='...HeadlessChrome...' cargo run --bin spike` visibly
     // demonstrates the negative case.
-    println!("user-agent: {}\n", session.user_agent());
+    println!("user-agent: {}\n", session.user_agent()?);
 
     // [check 2] Clearance. `Session` launches lazily, so the first call is what
     // pays for the browser launch, the navigation and the Cloudflare wait.
