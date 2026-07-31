@@ -42,8 +42,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          # The token is injected explicitly for the one push below rather than left in
-          # .git/config for every later step to reuse.
+          # Nothing here but the tag step needs a credentialed remote, and that step sets
+          # one up for itself.
           persist-credentials: false
 
       - name: Get version
@@ -160,14 +160,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.check_and_tag.outputs.tag }}
         run: |
-          # Reuse a draft release's notes if one is waiting, else let GitHub generate
-          # them from the commits. Attach the wheels so the binaries are downloadable
-          # without PyPI.
-          DRAFT_TAG=$(gh release list --limit 1 --json isDraft,tagName \
-            --jq '.[] | select(.isDraft==true) | .tagName' || echo "")
-          if [ -n "$DRAFT_TAG" ]; then
-            gh release view "$DRAFT_TAG" --json body --jq '.body' > notes.md
-            gh release create "$TAG" --title "$TAG" --notes-file notes.md dist/*
-          else
-            gh release create "$TAG" --title "$TAG" --generate-notes dist/*
-          fi
+          # Notes generated from the commits. Nothing in this repo drafts releases, so
+          # there is no draft to adopt: the branch that looked for one picked "the most
+          # recent draft" regardless of its tag, and would then have collided with it
+          # anyway, since a draft already holds the tag being created.
+          #
+          # The wheels are attached so the binaries are downloadable without PyPI.
+          gh release create "$TAG" --title "$TAG" --generate-notes dist/*
