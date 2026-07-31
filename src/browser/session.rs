@@ -405,6 +405,8 @@ pub struct Session {
     /// Only ever read or written while holding the `live` lock, which is what makes
     /// `Relaxed` sufficient and the check race-free.
     closed: AtomicBool,
+    /// Unlike `closed`, set before the `live` lock is acquired so an in-progress poll can see it without the lock.
+    shutting_down: AtomicBool,
     /// Set while an interactive login owns the profile. Same lock discipline as
     /// `closed`: only touched under the `live` lock.
     login_in_progress: AtomicBool,
@@ -427,6 +429,7 @@ impl Session {
             user_agent: std::sync::OnceLock::new(),
             live: Mutex::new(None),
             closed: AtomicBool::new(false),
+            shutting_down: AtomicBool::new(false),
             login_in_progress: AtomicBool::new(false),
             next_generation: AtomicU64::new(0),
             build: Mutex::new(None),
@@ -480,7 +483,7 @@ impl Session {
                     // no generation to attribute the failure to, so `relaunch` would
                     // find a browser it could not match and no-op, spending the one
                     // permitted retry on nothing. Matches the fresh-launch path below.
-                    if let Err(e) = navigate_and_clear(&live.page).await {
+                    if let Err(e) = navigate_and_clear(&live.page, &self.shutting_down).await {
                         if let Some(dead) = guard.take() {
                             dead.shutdown().await;
                         }
@@ -498,7 +501,7 @@ impl Session {
         }
 
         let live = self.launch().await.map_err(ApiError::Other)?;
-        if let Err(e) = navigate_and_clear(&live.page).await {
+        if let Err(e) = navigate_and_clear(&live.page, &self.shutting_down).await {
             live.shutdown().await;
             return Err(e);
         }
@@ -602,7 +605,17 @@ impl Session {
     ///
     /// Dropping it instead kills the process, and an unflushed profile is exactly
     /// how a login silently fails to persist.
+    /// Ask every in-flight wait to give up, without awaiting anything.
+    ///
+    /// Separate from [`Session::close`] because shutdown has to stop a login first, and
+    /// that await can itself be queued behind the `live` lock this flag releases.
+    pub fn signal_shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Relaxed);
+    }
+
     pub async fn close(&self) -> Result<()> {
+        // Deliberately before the lock attempt; see `shutting_down`'s field docs.
+        self.signal_shutdown();
         let mut guard = self.live.lock().await;
         // Before the teardown, so a tool call still in flight cannot slip a fresh
         // launch in behind us. On the signal path `serve` calls this and then
@@ -645,6 +658,10 @@ impl Session {
 
     /// Must be called while holding the `live` lock.
     fn refuse_if_unavailable(&self) -> Result<(), ApiError> {
+        // Checked ahead of `closed` because `close` sets this before it even tries for the lock.
+        if self.shutting_down.load(Ordering::Relaxed) {
+            return Err(closed_underneath_us());
+        }
         if self.closed.load(Ordering::Relaxed) {
             return Err(closed_underneath_us());
         }
@@ -682,7 +699,7 @@ impl Session {
             dead.handler.abort();
         }
         let live = self.launch().await.map_err(ApiError::Other)?;
-        if let Err(e) = navigate_and_clear(&live.page).await {
+        if let Err(e) = navigate_and_clear(&live.page, &self.shutting_down).await {
             live.shutdown().await;
             return Err(e);
         }
@@ -937,9 +954,54 @@ pub(crate) async fn evaluate(page: &Page, expr: &str) -> Result<serde_json::Valu
     Ok(result.value().cloned().unwrap_or(serde_json::Value::Null))
 }
 
+const CLEARANCE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Outcome of one poll; plain data (not `Page`) so precedence below is testable without Chrome.
+#[derive(Debug, PartialEq, Eq)]
+enum ClearanceStep {
+    Ready,
+    /// Typed as `Cloudflare` so the caller relaunches instead of failing bare.
+    Refused(&'static str),
+    ShuttingDown,
+    TimedOut,
+    KeepWaiting,
+}
+
+/// Precedence when several conditions hold at once: a block marker, then an arrived page,
+/// then shutdown, then the deadline. A page that cleared is reported ready even while
+/// shutting down, since there is nothing left to wait for.
+fn clearance_step(
+    origin: &str,
+    text: Option<&str>,
+    shutting_down: bool,
+    past_deadline: bool,
+) -> ClearanceStep {
+    if let Some(marker) = text.and_then(|t| first_marker(t, BLOCK_MARKERS)) {
+        return ClearanceStep::Refused(marker);
+    }
+
+    // Not keyed on nav-label text like "Tuotteet": that ties readiness to third-party UI
+    // copy, so a rename or A/B test would misreport as a Cloudflare block instead of just working.
+    let challenged = text.is_some_and(|t| first_marker(t, CHALLENGE_MARKERS).is_some());
+    if !challenged && origin == SHOP_ORIGIN && text.is_some_and(|t| !t.trim().is_empty()) {
+        return ClearanceStep::Ready;
+    }
+    if shutting_down {
+        return ClearanceStep::ShuttingDown;
+    }
+    if past_deadline {
+        return ClearanceStep::TimedOut;
+    }
+    ClearanceStep::KeepWaiting
+}
+
 /// Navigate to the shop and wait for Cloudflare, polling rather than sleeping a
 /// fixed duration -- a fixed sleep makes failures indistinguishable from slowness.
-async fn navigate_and_clear(page: &Page) -> Result<(), ApiError> {
+async fn navigate_and_clear(page: &Page, shutting_down: &AtomicBool) -> Result<(), ApiError> {
+    // Skip the round trip entirely if a shutdown is already requested.
+    if shutting_down.load(Ordering::Relaxed) {
+        return Err(closed_underneath_us());
+    }
     page.goto(SHOP_URL)
         .await
         .map_err(|e| cdp_error_to_api_error(&format!("navigating to {SHOP_URL}"), e))?;
@@ -962,40 +1024,35 @@ async fn navigate_and_clear(page: &Page) -> Result<(), ApiError> {
         let origin = probe["origin"].as_str().unwrap_or_default();
         let text = probe["text"].as_str();
 
-        // A refusal is terminal for this attempt. Typed as Cloudflare so it gets
-        // the relaunch rather than surfacing as a bare failure.
-        if let Some(marker) = text.and_then(|t| first_marker(t, BLOCK_MARKERS)) {
-            return Err(ApiError::Cloudflare {
-                detail: format!(
-                    "page load rejected ({marker:?}) -- the browser fingerprint is being \
-                     refused; a UA containing HeadlessChrome is the usual cause"
-                ),
-            });
+        match clearance_step(
+            origin,
+            text,
+            shutting_down.load(Ordering::Relaxed),
+            Instant::now() > deadline,
+        ) {
+            ClearanceStep::Ready => return Ok(()),
+            ClearanceStep::Refused(marker) => {
+                return Err(ApiError::Cloudflare {
+                    detail: format!(
+                        "page load rejected ({marker:?}) -- the browser fingerprint is being \
+                         refused; a UA containing HeadlessChrome is the usual cause"
+                    ),
+                });
+            }
+            // `ApiError::Other`, not Cloudflare-shaped, so `plan_recovery` gives up instead of relaunching.
+            ClearanceStep::ShuttingDown => return Err(closed_underneath_us()),
+            ClearanceStep::TimedOut => {
+                // Also bot mitigation, just quieter, so the same remedy applies.
+                return Err(ApiError::Cloudflare {
+                    detail: format!(
+                        "challenge did not clear within {}s",
+                        CLEARANCE_TIMEOUT.as_secs()
+                    ),
+                });
+            }
+            ClearanceStep::KeepWaiting => {}
         }
-
-        // A challenge, by contrast, is just "not yet": real Chrome executes it and
-        // it clears on its own. Keep polling until the deadline.
-        let challenged = text.is_some_and(|t| first_marker(t, CHALLENGE_MARKERS).is_some());
-
-        // Deliberately not `text.contains("Tuotteet")`. Keying readiness off two
-        // Finnish nav labels made every API call depend on third-party UI copy for
-        // no benefit: a label rename, an A/B test or a locale flip would have cost
-        // 45s of polling and then been misreported as a Cloudflare block. The
-        // same-origin fetch only needs the document's origin.
-        if !challenged && origin == SHOP_ORIGIN && text.is_some_and(|t| !t.trim().is_empty()) {
-            return Ok(());
-        }
-        if Instant::now() > deadline {
-            // A challenge that never resolves is also bot mitigation, just a
-            // quieter form of it, and the same remedy applies.
-            return Err(ApiError::Cloudflare {
-                detail: format!(
-                    "challenge did not clear within {}s",
-                    CLEARANCE_TIMEOUT.as_secs()
-                ),
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(CLEARANCE_POLL_INTERVAL).await;
     }
 }
 
@@ -1551,6 +1608,86 @@ mod tests {
             "{:?}",
             start.elapsed()
         );
+    }
+
+    #[test]
+    fn a_shutdown_request_interrupts_a_still_open_challenge() {
+        assert_eq!(
+            clearance_step("https://example.com", Some("Just a moment..."), true, false),
+            ClearanceStep::ShuttingDown,
+            "without this, a shutdown mid-challenge would fall through to KeepWaiting \
+             and hold the live lock for up to CLEARANCE_TIMEOUT"
+        );
+    }
+
+    #[test]
+    fn shutting_down_does_not_override_an_already_cleared_page() {
+        assert_eq!(
+            clearance_step(SHOP_ORIGIN, Some("Tervetuloa K-Ruokaan"), true, false),
+            ClearanceStep::Ready
+        );
+    }
+
+    #[test]
+    fn a_block_marker_still_refuses_during_a_shutdown() {
+        assert_eq!(
+            clearance_step(
+                "https://example.com",
+                Some("Attention Required"),
+                true,
+                false
+            ),
+            ClearanceStep::Refused("Attention Required")
+        );
+    }
+
+    #[test]
+    fn a_past_deadline_still_times_out_without_a_shutdown_request() {
+        assert_eq!(
+            clearance_step("https://example.com", Some("Just a moment..."), false, true),
+            ClearanceStep::TimedOut
+        );
+    }
+
+    #[test]
+    fn keeps_waiting_when_nothing_terminal_has_happened() {
+        assert_eq!(
+            clearance_step(
+                "https://example.com",
+                Some("Just a moment..."),
+                false,
+                false
+            ),
+            ClearanceStep::KeepWaiting
+        );
+    }
+
+    /// Needs no Chrome: the lock is held by the test itself, standing in for a poll mid-challenge.
+    #[tokio::test]
+    async fn close_signals_shutdown_before_it_can_get_the_lock() {
+        let profile =
+            std::env::temp_dir().join(format!("k-ruoka-shutdown-flag-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&profile);
+        let session = std::sync::Arc::new(Session::new(&profile, LaunchMode::Headless).unwrap());
+
+        let guard = session.live.lock().await;
+        let closing = {
+            let session = std::sync::Arc::clone(&session);
+            tokio::spawn(async move { session.close().await })
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !session.shutting_down.load(Ordering::Relaxed) {
+            assert!(
+                Instant::now() < deadline,
+                "close did not set shutting_down while this test still held the live lock"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        drop(guard);
+        closing.await.unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&profile);
     }
 
     /// `serve` must be able to recover from a block; `login` must not, because the

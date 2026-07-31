@@ -78,6 +78,10 @@ pub async fn serve() -> Result<()> {
     // whole reason for handling the signal, so it must finish before we go.
     // The login child first: it owns the profile while it runs, and exiting without
     // stopping it leaves a headful Chrome holding the profile's lock.
+    // Before the login stop, not after: stopping a login waits on its own lock, which a
+    // start_login can be holding while it waits for the `live` lock that a clearance poll
+    // owns. Signalling first is what lets that poll release it.
+    session.signal_shutdown();
     trace_shutdown!("stopping any login, then closing the browser");
     login_for_shutdown.shutdown().await;
     session.close().await.ok();
