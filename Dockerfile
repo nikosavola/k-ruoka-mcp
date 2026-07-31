@@ -8,8 +8,15 @@ FROM rust:1-alpine AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
+# Keyed only on Cargo.toml/Cargo.lock so this layer survives every source-only commit.
+# cargo builds every dependency for the target bin regardless of what a dummy main.rs calls.
+RUN mkdir src && echo 'fn main() {}' > src/main.rs \
+    && cargo build --release --bin k-ruoka-mcp \
+    && rm -rf src
 COPY src ./src
-RUN cargo build --release --bin k-ruoka-mcp
+# touch forces a fingerprint change even if COPY lands in the same on-disk second as the
+# dummy main.rs above.
+RUN touch src/main.rs && cargo build --release --bin k-ruoka-mcp
 
 # Runtime: Alpine plus the one thing this server actually needs, a real Chromium to
 # drive over CDP. There is no public K-Ruoka API, so this cannot be made lighter.

@@ -37,6 +37,9 @@ jobs:
         with:
           persist-credentials: false
 
+      # Keys on Cargo.lock, so this only rebuilds when the dependency tree actually changes.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
       # `just` so the coverage flags live in exactly one place. Duplicating them here is
       # how a local number and a CI number quietly stop matching.
       - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
@@ -79,4 +82,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          # shared-key needs the OS too, or the three matrix jobs fight over one cache slot.
+          shared-key: cross-platform-${{ matrix.os }}
       - run: cargo test --all-targets
