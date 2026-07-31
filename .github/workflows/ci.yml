@@ -1,0 +1,53 @@
+# Tests and coverage on every push and pull request.
+#
+# Only the hermetic suite runs here. The live suites need network, Chrome and -- for the
+# account one -- a real K-Plussa login, so they are `#[ignore]`d and stay a local thing.
+# That is also why coverage sits around 70% rather than higher: see the note in the
+# justfile.
+#
+# Lint lives in the git hooks (`just pre-commit`) rather than being duplicated here.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test and coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # actions/upload-code-coverage attaches the report to the run.
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `just` so the coverage flags live in exactly one place. Duplicating them here is
+      # how a local number and a CI number quietly stop matching.
+      - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
+        with:
+          tool: cargo-llvm-cov,just
+
+      - name: Test with coverage
+        run: just coverage-xml
+
+      - name: Summary
+        run: just coverage
+
+      - name: Upload code coverage to GitHub
+        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1
+        with:
+          file: coverage.xml
+          language: Rust
+          label: code-coverage/cargo-llvm-cov

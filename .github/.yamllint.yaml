@@ -1,0 +1,20 @@
+extends: default
+
+rules:
+  # Comments in these files carry the reasoning, and they wrap at the same width as the
+  # Rust and the Markdown rather than at yamllint's default 80.
+  line-length:
+    max: 100
+  # `on:` is the GitHub Actions trigger key, not the YAML 1.1 boolean. Quoting it to
+  # satisfy this rule would change the key GitHub looks for.
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  # GitHub Actions workflows conventionally omit the `---` document start, and yamlfmt
+  # does not add one.
+  document-start: disable
+  # yamlfmt owns indentation; letting yamllint disagree would make the two fight.
+  indentation:
+    spaces: 2
+    indent-sequences: true

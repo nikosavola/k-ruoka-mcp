@@ -1,0 +1,8 @@
+formatter:
+  type: basic
+  # Workflows read better with the list dash indented under its key.
+  indentless_arrays: false
+  retain_line_breaks_single: true
+  # `on:` in a workflow is the reserved YAML 1.1 boolean, and quoting it would change
+  # the key GitHub looks for.
+  scan_folded_as_literal: true
