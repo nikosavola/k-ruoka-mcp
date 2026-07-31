@@ -8,6 +8,9 @@
 # attempt was cancelled after 25 minutes still inside `cargo build`. `ubuntu-24.04-arm`
 # runners are free for public repositories, and `build.yml` already uses one for the
 # aarch64 wheel, so there is nothing to emulate.
+#
+# A fork PR can't push to GHCR, so PR builds load the image into the runner's own
+# daemon and smoke test that instead of the registry.
 name: docker
 
 on:
@@ -23,6 +26,17 @@ on:
       - Cargo.lock
       - src/**
       - .github/workflows/docker.yml
+      - .github/workflows/docker_smoke_test.py
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker-entrypoint.sh
+      - Cargo.toml
+      - Cargo.lock
+      - src/**
+      - .github/workflows/docker.yml
+      - .github/workflows/docker_smoke_test.py
   workflow_dispatch:
 
 env:
@@ -39,12 +53,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: build (${{ matrix.arch }})
+  # Pull requests build and smoke only, in a job holding no registry credential. A
+  # same-repository PR's token is not downgraded the way a fork's is, so a job with
+  # packages: write would let a PR touch the published package before review.
+  build-pr:
+    name: build PR (${{ matrix.arch }})
+    if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.runner }}
     strategy:
-      # Both architectures are reported separately: knowing arm64 broke while amd64
-      # built is the whole point of splitting them.
       fail-fast: false
       matrix:
         include:
@@ -54,8 +70,44 @@ jobs:
             runner: ubuntu-24.04-arm
     permissions:
       contents: read
-      # The only credential this needs: GHCR authenticates with GITHUB_TOKEN, scoped to
-      # this repository's own package.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # Reads the shared cache but never writes it: a PR's own entries would evict what
+      # the push path relies on and can never help it.
+      - name: Build and load
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          tags: k-ruoka-mcp:pr-smoke-${{ matrix.arch }}
+          outputs: type=docker
+          cache-from: type=gha,scope=${{ matrix.arch }}
+
+      - name: Smoke test the image on this architecture
+        env:
+          IMAGE: k-ruoka-mcp:pr-smoke-${{ matrix.arch }}
+        run: python3 .github/workflows/docker_smoke_test.py "$IMAGE"
+
+  build:
+    name: build (${{ matrix.arch }})
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Reported separately: knowing arm64 broke while amd64 built is the point of the split.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,9 +122,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The same tag rules as the merge job below, even though nothing here is tagged:
-      # they decide the org.opencontainers.image.version label baked into each image, and
-      # without them it falls back to the branch name.
+      # Same tag rules as the merge job, though nothing here is tagged: they decide the
+      # org.opencontainers.image.version label, which otherwise falls back to the branch.
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
         with:
@@ -82,8 +133,7 @@ jobs:
             type=sha,format=short
 
       # Pushed by digest, with no tag: a tag here would be claimed by whichever
-      # architecture finished last instead of naming both. The merge job applies the tags
-      # to the manifest list that lists both digests.
+      # architecture finished last. The merge job tags the list naming both.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -92,12 +142,23 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMG }},push-by-digest=true,name-canonical=true,push=true
-          # Scoped per architecture, or the two jobs would evict each other's layers.
+          # Scoped per architecture, or the two jobs evict each other's layers.
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
-      # The digest is the only thing the merge job needs, and an empty file named after
-      # it carries it without any parsing on the other side.
+      # Proves the pushed bytes run, not just what buildx built locally.
+      - name: Pull the image back by digest
+        env:
+          IMAGE: ${{ env.IMG }}@${{ steps.build.outputs.digest }}
+        run: docker pull "$IMAGE"
+
+      # Failing here blocks merge (needs: build), so a broken image never gets tagged.
+      - name: Smoke test the image on this architecture
+        env:
+          IMAGE: ${{ env.IMG }}@${{ steps.build.outputs.digest }}
+        run: python3 .github/workflows/docker_smoke_test.py "$IMAGE"
+
+      # An empty file named after the digest carries it with no parsing on the other side.
       - name: Record the digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -111,14 +172,15 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
-          # Re-running the workflow keeps the previous attempt's artifacts, and uploading
-          # the same name twice is an error, so "Re-run all jobs" would fail here. That is
-          # the recovery path for a merge job that failed on a transient registry error.
+          # A re-run keeps the previous attempt's artifacts and uploading the same name
+          # twice is an error, so "Re-run all jobs" would fail here.
           overwrite: true
 
   merge:
     name: Join the architectures
     needs: build
+    # A PR build never pushes, so there's nothing to join.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       packages: write
