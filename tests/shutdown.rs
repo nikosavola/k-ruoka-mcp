@@ -8,8 +8,33 @@
 //! These need no network and no Chrome: the browser is launched lazily on the first
 //! tool call, and no tool is ever called here.
 
+use std::io::BufRead;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Drain a child stream into a shared buffer as it arrives.
+///
+/// Reading the pipes only when the test gives up would mean waiting for EOF, and a
+/// child that has not exited never delivers one -- which turned the diagnostic itself
+/// into the hang it was meant to explain.
+fn drain<R: std::io::Read + Send + 'static>(stream: R, label: &'static str) -> Arc<Mutex<String>> {
+    let sink = Arc::new(Mutex::new(String::new()));
+    let handle = Arc::clone(&sink);
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stream)
+            .lines()
+            .map_while(Result::ok)
+        {
+            let mut buf = handle.lock().unwrap();
+            buf.push_str(label);
+            buf.push_str(": ");
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+    });
+    sink
+}
 
 /// A scratch profile path that works on every platform.
 fn scratch_profile(name: &str) -> std::path::PathBuf {
@@ -29,6 +54,9 @@ fn serve_and_signal(signal: &str, handshake: bool) -> (Option<i32>, Duration, St
     let mut child = Command::new(env!("CARGO_BIN_EXE_k-ruoka-mcp"))
         .arg("serve")
         .env("K_RUOKA_PROFILE", &profile)
+        // Which phase the shutdown reached is the only evidence available when this
+        // fails on a runner rather than here.
+        .env("K_RUOKA_TRACE_SHUTDOWN", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -166,6 +194,9 @@ fn closing_stdin_ends_the_session_cleanly() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_k-ruoka-mcp"))
         .arg("serve")
         .env("K_RUOKA_PROFILE", &profile)
+        // Which phase the shutdown reached is the only evidence available when this
+        // fails on a runner rather than here.
+        .env("K_RUOKA_TRACE_SHUTDOWN", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -187,6 +218,9 @@ fn closing_stdin_ends_the_session_cleanly() {
         .unwrap();
         stdin.flush().unwrap();
     }
+    let logged = drain(child.stdout.take().expect("piped stdout"), "stdout");
+    let logged_err = drain(child.stderr.take().expect("piped stderr"), "stderr");
+
     std::thread::sleep(Duration::from_millis(400));
     drop(child.stdin.take());
 
@@ -196,7 +230,9 @@ fn closing_stdin_ends_the_session_cleanly() {
             Some(status) => break status,
             None if Instant::now() > deadline => {
                 child.kill().ok();
-                panic!("closing stdin did not end the process");
+                let err = logged_err.lock().unwrap().clone();
+                let out = logged.lock().unwrap().clone();
+                panic!("closing stdin did not end the process\n{err}{out}");
             }
             None => std::thread::sleep(Duration::from_millis(50)),
         }

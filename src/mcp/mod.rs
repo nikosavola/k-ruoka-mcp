@@ -13,6 +13,19 @@ use crate::browser::{KrApi, LaunchMode, Session, session::default_profile_dir};
 use crate::login_flow::ChildLogin;
 pub use tools::CartServer;
 
+/// Stderr breadcrumbs for the startup and shutdown path, off unless asked for.
+///
+/// Which of these appears is what located a Windows-only hang that no local run
+/// reproduced: only the first line printed, so the process was still in startup rather
+/// than stuck on the transport, which is where it looked like it was.
+macro_rules! trace_shutdown {
+    ($($arg:tt)*) => {
+        if std::env::var_os("K_RUOKA_TRACE_SHUTDOWN").is_some() {
+            eprintln!("k-ruoka-mcp[trace]: {}", format_args!($($arg)*));
+        }
+    };
+}
+
 pub async fn serve() -> Result<()> {
     // Before anything else, including startup. Tokio installs the OS handler inside
     // `signal()` rather than on the first poll, so registering here is what shrinks
@@ -20,6 +33,7 @@ pub async fn serve() -> Result<()> {
     // in the `select!` below left `Session::new` inside that window, and it forks
     // `google-chrome --version`, which is not bounded on a loaded machine.
     let mut terminate = TerminateSignals::install();
+    trace_shutdown!("signals installed");
 
     // One browser for the life of the server. A profile dir supports a single
     // Chrome instance, and relaunching per tool call would be slow and would
@@ -32,11 +46,14 @@ pub async fn serve() -> Result<()> {
     // session itself (to hand over the profile), not just the API seam.
     let login = Arc::new(ChildLogin::new(Arc::clone(&session)));
     let handler = CartServer::with_login(Arc::clone(&session) as Arc<dyn KrApi>, login);
+    trace_shutdown!("session built, starting the handshake");
+
     let serving = async {
         // The handshake is inside the select on purpose: a signal arriving while the
         // server is still waiting for `initialize` must be handled too, and it was
         // not when only `waiting()` was covered.
         let service = handler.serve(stdio()).await?;
+        trace_shutdown!("handshake done, serving");
         service.waiting().await?;
         anyhow::Ok(())
     };
@@ -45,7 +62,10 @@ pub async fn serve() -> Result<()> {
     // *normal* exit path here, not an edge case -- and taking it by default would
     // skip the close below, losing the cookie flush that `login` exists to produce.
     let outcome = tokio::select! {
-        result = serving => result,
+        result = serving => {
+            trace_shutdown!("the service loop ended on its own");
+            result
+        }
         signal = terminate.recv() => {
             eprintln!("k-ruoka-mcp: {signal}, shutting the browser down cleanly");
             Ok(())
@@ -55,7 +75,9 @@ pub async fn serve() -> Result<()> {
     // Close gracefully so Chrome flushes cookies back into the profile; a killed
     // browser can lose the session and force an unnecessary re-login. This is the
     // whole reason for handling the signal, so it must finish before we go.
+    trace_shutdown!("closing the browser");
     session.close().await.ok();
+    trace_shutdown!("browser closed, exiting");
 
     // Both paths exit explicitly rather than returning. Returning hands control back to
     // the runtime, which waits on tokio's blocking stdin reader -- and that read does not
