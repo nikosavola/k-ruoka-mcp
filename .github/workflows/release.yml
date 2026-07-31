@@ -1,0 +1,153 @@
+# Release on a version bump: push to main, and if the version has changed to one that
+# was never tagged, cut the tag, build every wheel, publish to PyPI and open a GitHub
+# release. Nothing to remember at release time except bumping the version.
+#
+# The trigger is the branch push, NOT the tag. The tag is created *by* this workflow, so
+# a `tags:` trigger would fire a second, duplicate run.
+#
+# Publishing uses PyPI Trusted Publishing, so no API token is stored anywhere:
+# repository nikosavola/k-ruoka-mcp, workflow release.yml, environment pypi. The
+# publishing job therefore has to live in *this* file -- PyPI matches on the entrypoint
+# workflow's filename, so moving it into the reusable build workflow breaks the match.
+#
+# Actions are pinned to commit SHAs with the tag in a comment: a tag is mutable, and
+# this workflow holds `id-token: write`.
+name: release
+
+on:
+  push:
+    branches: [main]
+  # Lets the path be rehearsed. Still gated on a version bump, so a dispatch on an
+  # already-released version stops after check_and_tag.
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Never two releases at once. PyPI versions are immutable, so a double publish is not
+  # something that can be undone.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check_and_tag:
+    name: Check for version bump and create tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.get_version.outputs.tag }}
+      new_tag_created: ${{ steps.check_tag.outputs.new_tag }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # The token is injected explicitly for the one push below rather than left in
+          # .git/config for every later step to reuse.
+          persist-credentials: false
+
+      - name: Get version
+        id: get_version
+        # Cargo.toml, not pyproject.toml: pyproject declares `dynamic = ["version"]` and
+        # maturin reads the crate version, so this is the only source of truth.
+        # `-m 1` matters -- dependencies carry `version =` too, and the package's is first.
+        run: |
+          VERSION=$(grep -m 1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read a version out of Cargo.toml"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag exists and create if not
+        id: check_tag
+        # Step outputs reach the script through the environment instead of being
+        # interpolated into it, so nothing upstream can be parsed as shell.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.get_version.outputs.tag }}
+          VERSION: ${{ steps.get_version.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG"; then
+            echo "Tag $TAG already exists. No new release will be created."
+            echo "new_tag=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag $TAG does not exist. Creating and pushing it."
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git remote set-url origin \
+              "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+            git tag -a "$TAG" -m "Release $VERSION"
+            git push origin "$TAG"
+            echo "new_tag=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build
+    needs: check_and_tag
+    if: needs.check_and_tag.outputs.new_tag_created == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+
+  # Before the GitHub release, so release notes never announce a version that failed to
+  # reach PyPI.
+  pypi_publish:
+    name: Publish to PyPI
+    needs: [check_and_tag, build]
+    if: needs.check_and_tag.outputs.new_tag_created == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/k-ruoka-mcp
+    permissions:
+      # The only thing this job needs. Trusted publishing trades this OIDC token with
+      # PyPI, so there is no secret to leak.
+      id-token: write
+    steps:
+      - name: Download every artefact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          # One artefact per platform, merged into a single dist/ -- unlike a
+          # pure-Python project, which has a single wheel to fetch.
+          pattern: "{wheel-*,sdist}"
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  github_release:
+    name: Create GitHub Release
+    needs: [check_and_tag, pypi_publish]
+    if: needs.check_and_tag.outputs.new_tag_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download every artefact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "{wheel-*,sdist}"
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check_and_tag.outputs.tag }}
+        run: |
+          # Reuse a draft release's notes if one is waiting, else let GitHub generate
+          # them from the commits. Attach the wheels so the binaries are downloadable
+          # without PyPI.
+          DRAFT_TAG=$(gh release list --limit 1 --json isDraft,tagName \
+            --jq '.[] | select(.isDraft==true) | .tagName' || echo "")
+          if [ -n "$DRAFT_TAG" ]; then
+            gh release view "$DRAFT_TAG" --json body --jq '.body' > notes.md
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md dist/*
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes dist/*
+          fi

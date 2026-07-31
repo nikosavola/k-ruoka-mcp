@@ -1,0 +1,125 @@
+# Builds every distributable artefact and proves each one works.
+#
+# Reusable (`workflow_call`) so `release.yml` owns the release *decision* and this file
+# owns the *building*. Also `workflow_dispatch`, so the packaging can be exercised
+# without going anywhere near a release.
+#
+# Wheels must be built here rather than locally: maturin tags a wheel with the build
+# machine's glibc, and a dev laptop produced `manylinux_2_39` -- which excludes Ubuntu
+# 22.04, Debian 12 and RHEL 9. maturin-action builds inside a manylinux2014 (glibc
+# 2.17) container, which is what makes the wheel installable on what people run.
+#
+# Actions are pinned to commit SHAs, with the tag in a comment. A tag is mutable and a
+# release pipeline holding `id-token: write` is worth protecting from that.
+name: build
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  wheels:
+    name: wheel (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      # `permissions: {}` above grants the GITHUB_TOKEN nothing, and checkout
+      # authenticates with it, so every job that checks out has to ask for this.
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64
+            manylinux: "2014"
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64
+            manylinux: "2014"
+          # `auto`, not omitted: the matrix feeds one `manylinux` input, and an empty
+          # string would *override* maturin-action's own default rather than fall back
+          # to it.
+          - name: macos-aarch64
+            runner: macos-latest
+            target: aarch64
+            manylinux: auto
+          - name: macos-x86_64
+            runner: macos-latest
+            target: x86_64
+            manylinux: auto
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x64
+            manylinux: auto
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+          sccache: "true"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # An sdist cannot install without a Rust toolchain, so it is a fallback for platforms
+  # with no wheel rather than the main artefact. Worth publishing anyway.
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # Prove the artefact does the one thing it exists to do, before it can reach PyPI.
+  # "The wheel built" is not evidence that `uvx k-ruoka-mcp` answers `initialize`: that
+  # depends on a bare invocation defaulting to `serve`, which is one line and was
+  # already a usage error once.
+  smoke:
+    name: smoke (${{ matrix.name }})
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: linux-x86_64, runner: ubuntu-latest}
+          - {name: macos-aarch64, runner: macos-latest}
+          - {name: windows-x86_64, runner: windows-latest}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: uvx the wheel and speak MCP to it
+        shell: bash
+        # `python`, not `python3`: the latter is not on PATH on the Windows images.
+        run: python .github/workflows/smoke_test.py
