@@ -12,6 +12,7 @@
 //! were awkward to get right -- the xvfb re-exec, the separate tab for the human, the
 //! poller, and the graceful close that makes the cookies persist.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -82,6 +83,10 @@ struct Running {
 pub struct ChildLogin {
     session: Arc<Session>,
     running: Mutex<Option<Running>>,
+    /// Test seam: lets `start` spawn a scripted child instead of re-execing `login`.
+    /// `cfg(test)` instead of a runtime flag, so it can't ship in a production binary.
+    #[cfg(test)]
+    spawn_override: Option<(PathBuf, Vec<String>)>,
 }
 
 impl ChildLogin {
@@ -89,6 +94,21 @@ impl ChildLogin {
         Self {
             session,
             running: Mutex::new(None),
+            #[cfg(test)]
+            spawn_override: None,
+        }
+    }
+
+    // Unix-only: the tests using this signal process groups, which Windows lacks.
+    #[cfg(all(test, unix))]
+    fn with_command(session: Arc<Session>, program: &str, args: &[&str]) -> Self {
+        Self {
+            session,
+            running: Mutex::new(None),
+            spawn_override: Some((
+                PathBuf::from(program),
+                args.iter().map(|a| a.to_string()).collect(),
+            )),
         }
     }
 
@@ -103,6 +123,26 @@ impl ChildLogin {
         if let Some(mut running) = self.running.lock().await.take() {
             terminate_group(&mut running.child).await;
         }
+    }
+
+    fn spawn_target(&self, debug_port: u16) -> Result<(PathBuf, Vec<String>), ApiError> {
+        #[cfg(test)]
+        if let Some((program, args)) = &self.spawn_override {
+            return Ok((program.clone(), args.clone()));
+        }
+        let exe = std::env::current_exe().map_err(|e| {
+            ApiError::Other(anyhow::anyhow!(
+                "cannot find this executable to re-run it: {e}"
+            ))
+        })?;
+        Ok((
+            exe,
+            vec![
+                "login".to_string(),
+                "--port".to_string(),
+                debug_port.to_string(),
+            ],
+        ))
     }
 }
 
@@ -134,16 +174,10 @@ impl LoginFlow for ChildLogin {
         // session is holding.
         self.session.release_for_login().await?;
 
-        let exe = std::env::current_exe().map_err(|e| {
-            ApiError::Other(anyhow::anyhow!(
-                "cannot find this executable to re-run it: {e}"
-            ))
-        })?;
+        let (exe, args) = self.spawn_target(debug_port)?;
         let mut command = Command::new(&exe);
         command
-            .arg("login")
-            .arg("--port")
-            .arg(debug_port.to_string())
+            .args(&args)
             // stdin must be null and both streams piped: this process's stdout is the
             // MCP JSON-RPC channel, and anything the child wrote to it would corrupt
             // the protocol.
@@ -164,8 +198,9 @@ impl LoginFlow for ChildLogin {
             Err(e) => {
                 self.session.resume_after_login().await;
                 return Err(ApiError::Other(anyhow::anyhow!(
-                    "could not start `{} login`: {e}",
-                    exe.display()
+                    "could not start `{} {}`: {e}",
+                    exe.display(),
+                    args.join(" ")
                 )));
             }
         };
@@ -395,5 +430,199 @@ mod tests {
     #[test]
     fn no_account_line_is_not_an_account() {
         assert_eq!(signed_in_account("timed out after 15 minutes\n"), None);
+    }
+
+    // Scripted `sh` children stand in for the real `login` subprocess: CI has no display
+    // or Chrome. A scripted child can exit before the drain task reads what it wrote, so
+    // these tests need multi_thread and the small sleeps in their scripts.
+
+    #[cfg(unix)]
+    async fn wait_for_pid_file(path: &std::path::Path) -> i32 {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(path)
+                && let Ok(pid) = contents.trim().parse::<i32>()
+            {
+                return pid;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "grandchild never wrote its pid to {}",
+                path.display()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// `kill(pid, 0)` sends no signal; it's the standard way to check a pid is alive.
+    #[cfg(unix)]
+    fn process_alive(pid: i32) -> bool {
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return false;
+        }
+        // A zombie still answers signal 0, and the group kill can outlive the shell that
+        // would have reaped it, so an unreaped exit would otherwise look alive. Only Linux
+        // has procfs to tell the difference; elsewhere signal 0 is all there is.
+        if !cfg!(target_os = "linux") {
+            return true;
+        }
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => !stat
+                .rsplit(')')
+                .next()
+                .is_some_and(|rest| rest.split_whitespace().next() == Some("Z")),
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_process_death(pid: i32) -> bool {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            if !process_alive(pid) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    async fn poll_until_not_waiting(login: &ChildLogin) -> LoginProgress {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let progress = login.status().await.unwrap();
+            if progress.state != "waiting" {
+                return progress;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "child never left the waiting state"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_child_that_dies_before_printing_the_marker_reports_why_and_frees_the_profile() {
+        let session = scratch_session("dies-before-ready");
+        let login = ChildLogin::with_command(
+            Arc::clone(&session),
+            "sh",
+            &["-c", "echo 'boom from child' >&2; sleep 1; exit 1"],
+        );
+
+        let err = login.start(0).await.unwrap_err();
+        assert!(
+            err.to_string().contains("boom from child"),
+            "error should surface what the dead child printed, got: {err}"
+        );
+
+        session
+            .release_for_login()
+            .await
+            .expect("a login that died before ready must hand the profile back");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_second_start_after_the_first_child_died_unobserved_spawns_a_fresh_one() {
+        let session = scratch_session("stale-slot");
+        let login = ChildLogin::with_command(
+            Arc::clone(&session),
+            "sh",
+            &["-c", "echo 'Sign in by hand'; sleep 1; exit 0"],
+        );
+
+        let first = login.start(0).await.unwrap();
+        assert_eq!(first.state, "waiting");
+
+        // Dies unobserved: calling `status` here would itself clear the stale slot.
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+
+        let second = login.start(0).await.unwrap();
+        assert_eq!(
+            second.state, "waiting",
+            "a stale, unobserved dead child must not block a fresh login"
+        );
+
+        // The second child is still sleeping; kill_on_drop would only reach the shell.
+        login.cancel().await.unwrap();
+    }
+
+    /// Cancel must reach the grandchild via the process group, not just the direct child.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_child_that_only_prints_the_marker_stays_waiting_until_cancelled() {
+        let session = scratch_session("waiting-then-cancelled");
+        let pidfile = std::env::temp_dir().join(format!(
+            "k-ruoka-login-flow-grandchild-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        let script = format!(
+            "echo 'Sign in by hand'; sleep 60 & echo $! > {}; wait",
+            pidfile.display()
+        );
+        let login = ChildLogin::with_command(Arc::clone(&session), "sh", &["-c", &script]);
+
+        let first = login.start(0).await.unwrap();
+        assert_eq!(first.state, "waiting");
+        assert!(first.instructions.unwrap().contains("Sign in by hand"));
+
+        let second = login.start(0).await.unwrap();
+        assert!(
+            second.detail.contains("already in progress"),
+            "a second start must not spawn another browser onto the same profile"
+        );
+
+        assert_eq!(login.status().await.unwrap().state, "waiting");
+
+        let grandchild = wait_for_pid_file(&pidfile).await;
+        assert!(
+            process_alive(grandchild),
+            "the grandchild should still be running before cancel"
+        );
+
+        let cancelled = login.cancel().await.unwrap();
+        assert_eq!(cancelled.state, "notStarted");
+        assert!(
+            wait_for_process_death(grandchild).await,
+            "cancel must reach the whole process group, including grandchildren, \
+             not just the direct child"
+        );
+
+        session
+            .release_for_login()
+            .await
+            .expect("cancel must free the profile");
+
+        let _ = std::fs::remove_file(&pidfile);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_child_that_signs_in_reports_the_account_once_it_exits() {
+        let session = scratch_session("signs-in");
+        let login = ChildLogin::with_command(
+            Arc::clone(&session),
+            "sh",
+            &[
+                "-c",
+                "echo 'Sign in by hand'; sleep 1; \
+                 echo 'Signed in as Test User <test@example.com>.'; exit 0",
+            ],
+        );
+
+        let started = login.start(0).await.unwrap();
+        assert_eq!(started.state, "waiting");
+
+        let finished = poll_until_not_waiting(&login).await;
+        assert_eq!(finished.state, "signedIn");
+        assert_eq!(
+            finished.account.as_deref(),
+            Some("Test User <test@example.com>")
+        );
     }
 }
