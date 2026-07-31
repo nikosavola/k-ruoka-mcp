@@ -6,7 +6,7 @@ description = "MCP server for managing a K-Ruoka shopping cart for one K-Plussa 
 repository = "https://github.com/nikosavola/k-ruoka-mcp"
 license = "Apache-2.0"
 # The wheel ships this binary and only this one. `spike` and `probe` are development
-# tools that reproduce measurements against the live site (NOTES.md); they stay in the
+# tools that reproduce measurements against the live site; they stay in the
 # repo and out of the distribution.
 default-run = "k-ruoka-mcp"
 

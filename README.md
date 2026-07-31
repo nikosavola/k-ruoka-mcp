@@ -70,6 +70,49 @@ elsewhere. The release workflow builds inside a manylinux container for that rea
 
 </details>
 
+<details>
+<summary>Or Docker instead of uvx</summary>
+
+Published to `ghcr.io/nikosavola/k-ruoka-mcp` on every push to `main` (GHCR only, not
+Docker Hub, so no separate account is needed):
+
+```json
+{
+  "mcpServers": {
+    "k-ruoka-cart": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "k-ruoka-profile:/home/k-ruoka/.local/share/k-ruoka-mcp",
+        "ghcr.io/nikosavola/k-ruoka-mcp"
+      ]
+    }
+  }
+}
+```
+
+The volume matters: without it, each container run starts from an empty profile, so the
+login from `docker run ... login` would not be there for `serve` to find. Sign in once
+against the same volume:
+
+```sh
+docker run -it --rm \
+  -v k-ruoka-profile:/home/k-ruoka/.local/share/k-ruoka-mcp \
+  -p 9222:9222 \
+  ghcr.io/nikosavola/k-ruoka-mcp login --port 9222
+```
+
+`login` needs a display it does not have inside the container, so it prints SSH-tunnel
+and `chrome://inspect` instructions the same way a headless Linux machine would; publish
+the debug port with `-p` so they work.
+
+Built from an Alpine base with the release binary and a real Chromium (there is no public
+K-Ruoka API to talk to without one), running as a non-root user under `tini` so
+Chromium's child processes get reaped and `docker stop` triggers the same graceful
+shutdown as a `SIGTERM` anywhere else.
+
+</details>
+
 ## Setup
 
 ### 1. Log in (once, by hand)

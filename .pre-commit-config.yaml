@@ -110,6 +110,12 @@ repos:
       - id: detect-private-key
         priority: check
 
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.15.0
+    hooks:
+      - id: hadolint-docker
+        priority: check
+
   - repo: https://github.com/adrienverge/yamllint.git
     rev: v1.38.0
     hooks:
@@ -139,8 +145,6 @@ repos:
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.2
     hooks:
-      # NOTES.md and HANDOFF.md are the real deliverable of this project as much as the
-      # code is. See the ignore list in pyproject.toml -- there is a lot of Finnish.
       - id: codespell
         priority: check
         additional_dependencies: [tomli]

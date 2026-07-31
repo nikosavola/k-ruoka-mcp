@@ -1,0 +1,10 @@
+/target
+/dist
+.git
+.jj
+.github
+tests
+*.md
+justfile
+.pre-commit-config.yaml
+pyproject.toml

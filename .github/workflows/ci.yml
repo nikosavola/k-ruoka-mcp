@@ -21,7 +21,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  # Coverage needs cargo-llvm-cov, which is easiest to keep on one OS. Cross-platform
+  # correctness (the `cross-platform` job below) does not need it: the hermetic suite
+  # launches no browser, so it is a fair test of the portability code paths without
+  # needing Chrome or a coverage toolchain on every runner.
+  coverage:
     name: Test and coverage
     runs-on: ubuntu-latest
     permissions:
@@ -51,3 +55,23 @@ jobs:
           file: coverage.xml
           language: Rust
           label: code-coverage/cargo-llvm-cov
+
+  # Chrome discovery, the UA platform token, profile locations and signal handling all
+  # branch per OS. This is the only thing that can actually catch a platform-specific
+  # regression short of running the live suite by hand on each OS, since none of those
+  # branches launch a browser -- `cfg!(target_os = ...)` picks the value at compile time,
+  # so a Windows or macOS build failure or a wrong constant shows up here.
+  cross-platform:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo test --all-targets
