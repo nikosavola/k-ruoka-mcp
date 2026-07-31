@@ -6,11 +6,12 @@ name: docker
 on:
   push:
     branches: [main]
-    # Rebuild when the image definition changes, but a source change on main is the
-    # common case and already covered by the branch trigger above.
+    # Everything that ends up inside the image, entrypoint included. A push touching
+    # only docs or tests does not change the image, so it does not rebuild it.
     paths:
       - Dockerfile
       - .dockerignore
+      - docker-entrypoint.sh
       - Cargo.toml
       - Cargo.lock
       - src/**
