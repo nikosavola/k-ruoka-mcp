@@ -1,0 +1,32 @@
+[package]
+name = "k-ruoka-mcp"
+version = "0.1.0"
+edition = "2024"
+description = "MCP server for managing a K-Ruoka shopping cart for one K-Plussa account"
+repository = "https://github.com/nikosavola/k-ruoka-mcp"
+license = "Apache-2.0"
+# The wheel ships this binary and only this one. `spike` and `probe` are development
+# tools that reproduce measurements against the live site (NOTES.md); they stay in the
+# repo and out of the distribution.
+default-run = "k-ruoka-mcp"
+
+[dependencies]
+anyhow = "1.0.104"
+async-trait = "0.1.91"
+chromiumoxide = "0.9"
+clap = { version = "4.6.4", features = ["derive"] }
+futures = "0.3.33"
+rmcp = { version = "3", features = [
+  "macros",
+  "schemars",
+  "server",
+  "transport-io"
+] }
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.19"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+rmcp = { version = "3", features = ["client"] }

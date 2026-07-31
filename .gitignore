@@ -1,0 +1,8 @@
+/target
+
+# maturin's default output when --out is passed, e.g. `maturin build --out dist`.
+/dist
+
+# The browser profile normally lives in ~/.local/share/k-ruoka-mcp/profile,
+# but K_RUOKA_PROFILE can point anywhere. It holds a live login -- never commit it.
+/profile
