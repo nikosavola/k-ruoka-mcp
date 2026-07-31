@@ -34,5 +34,4 @@ jobs:
           keep-n-tagged: 10
           delete-untagged: true
           validate: true
-          # Ships dry-run deliberately: flip to false once a run's log matches expectations.
-          dry-run: true
+          dry-run: false
