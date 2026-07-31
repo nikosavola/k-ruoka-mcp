@@ -35,3 +35,8 @@ rmcp = { version = "3", features = ["client"] }
 # killing just the child leaves it holding the profile lock.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Drops the symbol table only (release has no DWARF anyway), at the cost of function
+# names in a backtrace. 15.7 MB to 10.6 MB.
+[profile.release]
+strip = true
