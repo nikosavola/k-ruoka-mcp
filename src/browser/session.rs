@@ -1017,6 +1017,11 @@ const UA_PLATFORM: &str = if cfg!(target_os = "macos") {
 /// The installed Chrome's version number, e.g. `150.0.7871.181`.
 fn chrome_version() -> Result<String> {
     let path = chrome_path();
+
+    // Not asked on Windows at all. `chrome.exe --version` there does not print a version
+    // and does not exit, so `output()` waits for a process that never finishes: this hung
+    // startup outright rather than falling through to the directory read below.
+    #[cfg(not(windows))]
     if let Ok(out) = std::process::Command::new(&path).arg("--version").output()
         && let Ok(stdout) = String::from_utf8(out.stdout)
         && let Some(version) = first_version_token(&stdout)
@@ -1024,8 +1029,8 @@ fn chrome_version() -> Result<String> {
         return Ok(version);
     }
 
-    // `--version` is effectively a no-op on Windows Chrome. It does keep a version-named
-    // directory next to the executable, which is the usual way to read it.
+    // Chrome keeps a version-named directory next to the executable. On Windows this is
+    // the only way; elsewhere it is the fallback.
     if let Some(version) = version_from_install_dir(Path::new(&path)) {
         return Ok(version);
     }
