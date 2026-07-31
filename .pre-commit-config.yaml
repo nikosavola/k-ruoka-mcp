@@ -1,0 +1,175 @@
+# Git hooks, run with prek (https://prek.j178.dev) rather than pre-commit:
+#
+#     uv tool install prek     # or: cargo install prek
+#     prek install             # install the git hook
+#     prek run --all-files     # run everything now
+#
+# `priority` is a prek extension; plain pre-commit ignores it and runs the hooks
+# sequentially in file order, which is also correct, just slower.
+#
+# Lower priority runs earlier. Hooks sharing a priority run CONCURRENTLY, so the grouping
+# below is a correctness constraint, not a preference: no two hooks in the same group may
+# rewrite the same file.
+#
+#   format     (0)  Language formatters, each owning a different file type: .rs, .py,
+#                   .yaml, .toml, justfile. Disjoint, so they parallelise safely.
+#   format-py (10)  ruff-format, which must follow ruff's --fix on the same .py files.
+#   fix       (20)  Whitespace and EOF fixers, which touch *every* type -- so they run
+#                   after all formatters rather than racing them.
+#   check     (30)  Read-only. `cargo clippy` overlaps the cheap checks here, which is
+#                   where the real wall-clock saving is.
+#   test      (40)  After clippy on purpose: both take cargo's target-directory lock, so
+#                   running them together would just make one block on the other.
+priorities:
+  format: 0
+  format-py: 10
+  fix: 20
+  check: 30
+  test: 40
+
+repos:
+  # --- Formatters: one file type each, so they can run concurrently ---
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --all
+        types: [rust]
+        # cargo works on the whole crate, not on a file list.
+        pass_filenames: false
+        priority: format
+
+      # `just --fmt` is still nightly-gated, hence --unstable.
+      - id: just-fmt
+        name: just --fmt
+        language: system
+        entry: just --fmt --unstable --justfile
+        files: ^justfile$
+        priority: format
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.19
+    hooks:
+      # The Python here is three MCP test harnesses, not a package -- see the lint
+      # config in pyproject.toml, which is tuned for scripts.
+      - id: ruff
+        priority: format
+        args: [--fix, --exit-non-zero-on-fix, --config=pyproject.toml]
+      - id: ruff-format
+        priority: format-py
+        args: [--config=pyproject.toml]
+
+  - repo: https://github.com/google/yamlfmt
+    rev: v0.21.0
+    hooks:
+      - id: yamlfmt
+        priority: format
+        args: [-conf, .github/.yamlfmt.yaml]
+
+  - repo: https://github.com/tombi-toml/tombi-pre-commit
+    rev: v0.9.16
+    hooks:
+      - id: tombi-format
+        priority: format
+        # Generated and enormous; formatting it would be pure diff noise.
+        exclude: ^Cargo\.lock$
+
+  # --- Cross-cutting fixers: after every formatter, never alongside one ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # `cargo fmt` already handles both of these for .rs files; these are for the
+      # Markdown, YAML and TOML.
+      - id: trailing-whitespace
+        priority: fix
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+        priority: fix
+
+      # --- Read-only checks ---
+      - id: check-yaml
+        priority: check
+      - id: check-toml
+        priority: check
+      - id: check-merge-conflict
+        priority: check
+      - id: check-case-conflict
+        priority: check
+      - id: mixed-line-ending
+        priority: check
+        args: [--fix=lf]
+      # The test harnesses are run directly as well as through cargo.
+      - id: check-executables-have-shebangs
+        priority: check
+      # The browser profile holds a live login and must never be committed. Nothing here
+      # is large by accident, so a small ceiling is a useful tripwire.
+      - id: check-added-large-files
+        priority: check
+        args: [--maxkb=512]
+      - id: detect-private-key
+        priority: check
+
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        priority: check
+        args: [--strict, -c=.github/.yamllint.yaml]
+
+  # Catches what `check-yaml` cannot: an unknown `uses:`, a bad matrix reference, a typo
+  # in a `needs:`. It also runs shellcheck over every `run:` block, which is the only
+  # shell in this repo and the part most likely to be subtly wrong.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        priority: check
+
+  # Workflow *security* auditing: unpinned actions, over-broad permissions, script
+  # injection through `${{ }}` in a run block, credential persistence. The release
+  # workflow holds `id-token: write` and can push tags, so this one earns its place --
+  # it is the check that would have caught this session's `permissions: {}` mistake.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.24.1
+    hooks:
+      - id: zizmor
+        priority: check
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.2
+    hooks:
+      # NOTES.md and HANDOFF.md are the real deliverable of this project as much as the
+      # code is. See the ignore list in pyproject.toml -- there is a lot of Finnish.
+      - id: codespell
+        priority: check
+        additional_dependencies: [tomli]
+
+  - repo: https://github.com/tombi-toml/tombi-pre-commit
+    rev: v0.9.16
+    hooks:
+      - id: tombi-lint
+        priority: check
+        exclude: ^Cargo\.lock$
+
+  - repo: local
+    hooks:
+      - id: cargo-clippy
+        name: cargo clippy
+        language: system
+        # --all-targets so the tests and both helper binaries are linted too.
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        types: [rust]
+        pass_filenames: false
+        priority: check
+
+      - id: cargo-test
+        name: cargo test
+        # Only the hermetic tests. Both live suites are #[ignore]d because they drive a
+        # real browser against k-ruoka.fi, and the account one mutates a real cart --
+        # see tests/live_e2e.rs and tests/account_e2e.rs.
+        language: system
+        entry: cargo test --all-targets
+        types: [rust]
+        pass_filenames: false
+        priority: test
