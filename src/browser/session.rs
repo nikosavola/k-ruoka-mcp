@@ -46,6 +46,9 @@ fn cloudflare_marker(text: &str) -> Option<&'static str> {
 }
 const CLEARANCE_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// How long a browser gets to exit after being asked, before it is killed.
+const GRACEFUL_EXIT: Duration = Duration::from_secs(10);
+
 /// chromiumoxide's `DEFAULT_ARGS` carry `--enable-automation` (a bot signal) and
 /// `--lang=en_US`, and its `ArgsBuilder` *merges* repeated keys instead of
 /// overriding them, so `lang=fi-FI` on top would produce `--lang=en_US,fi-FI`.
@@ -86,10 +89,9 @@ pub enum LaunchMode {
 
 /// Why a `/kr-api/` call did not produce a usable answer.
 ///
-/// The distinction between the first two is the single most important thing in
-/// this file: [`ApiError::Cloudflare`] is recoverable by relaunching the browser
-/// against the *same* profile, while [`ApiError::AuthExpired`] must never touch
-/// the profile — doing so would destroy a real login over a transient failure.
+/// [`ApiError::Cloudflare`] and [`ApiError::BrowserGone`] both relaunch against the
+/// *same* profile; [`ApiError::AuthExpired`] must never touch it, or a transient failure
+/// destroys a real login.
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     /// Bot mitigation. Relaunch against the same profile dir; never delete it.
@@ -100,6 +102,11 @@ pub enum ApiError {
     /// silently bypass the relaunch that is the only remedy for it.
     #[error("Cloudflare blocked us: {detail}")]
     Cloudflare { detail: String },
+
+    /// The transport to Chrome died. The browser is broken, not the login it holds, so
+    /// the remedy is the same relaunch as [`ApiError::Cloudflare`].
+    #[error("the browser connection was lost: {detail}")]
+    BrowserGone { detail: String },
 
     /// The K-Plussa session is gone. Do not retry, do not touch the profile.
     #[error("K-Plussa session has expired -- run `k-ruoka-mcp login` again")]
@@ -188,7 +195,9 @@ fn plan_recovery(error: &ApiError, relaunch_unavailable: bool, refreshed_build: 
         ApiError::StaleBuild {
             wanted: Some(build),
         } if !refreshed_build => Recovery::RefreshBuild(build.clone()),
-        ApiError::Cloudflare { .. } if !relaunch_unavailable => Recovery::Relaunch,
+        ApiError::Cloudflare { .. } | ApiError::BrowserGone { .. } if !relaunch_unavailable => {
+            Recovery::Relaunch
+        }
         // AuthExpired especially: retrying cannot help, and the profile must not be
         // touched over it.
         _ => Recovery::GiveUp,
@@ -354,8 +363,20 @@ impl Live {
     /// cancelled mid-launch still takes the ugly route, which is why the launch error
     /// names a leftover Chrome as the likely cause rather than a corrupt profile.
     async fn shutdown(mut self) {
-        self.browser.close().await.ok();
-        self.browser.wait().await.ok();
+        // `close` is a CDP call, so a dead transport cannot answer it, and `wait` then
+        // blocks on a child nothing has asked to exit. That is exactly the state a
+        // BrowserGone relaunch starts from, so an unbounded wait here would hang the
+        // relaunch it is meant to enable. The timeout is far longer than a healthy Chrome
+        // needs to flush cookies and go.
+        let asked_to_exit = self.browser.close().await.is_ok();
+        let exited = asked_to_exit
+            && tokio::time::timeout(GRACEFUL_EXIT, self.browser.wait())
+                .await
+                .is_ok();
+        if !exited {
+            self.browser.kill().await;
+            self.browser.wait().await.ok();
+        }
         self.handler.abort();
     }
 }
@@ -632,9 +653,9 @@ impl Session {
         Ok(())
     }
 
-    /// Relaunch against the same profile directory. This is the Cloudflare-block
-    /// remedy. It deliberately does not delete anything: the profile holds a real
-    /// credential, so it must survive a block rather than being cleared.
+    /// Relaunch against the same profile directory. The remedy for both a Cloudflare
+    /// block and a dead browser. It deliberately does not delete anything: the profile
+    /// holds a real credential, so it must survive rather than being cleared.
     /// Replace the browser generation `blocked` -- unless someone already has.
     /// `None` means the caller had no browser to blame, so anything currently in the
     /// slot is by definition newer and there is nothing to do.
@@ -705,8 +726,8 @@ impl Session {
     /// One attempt: get a page, then make the request on it.
     ///
     /// Returns a tuple rather than a `Result` **on purpose**. Getting the page can
-    /// fail with a Cloudflare block -- that is where a refused page load is detected,
-    /// and it is the only trigger for the relaunch branch ever observed -- so this
+    /// fail with a Cloudflare block or a dead browser, which is where a refused page
+    /// load and a dropped transport are both detected, so this
     /// signature is what stops a future `?` from routing that failure past the retry
     /// loop. It has happened twice, by two different routes, both times
     /// while the classification itself was fully unit-tested. With no `Result` to
@@ -750,7 +771,7 @@ impl Session {
         self.limiter.acquire().await;
 
         let expr = fetch_script(method, path, body, build.as_deref());
-        let value = evaluate(page, &expr).await.map_err(ApiError::Other)?;
+        let value = evaluate(page, &expr).await?;
         let raw: RawResponse = serde_json::from_value(value)
             .context("unexpected shape from the in-page fetch helper")
             .map_err(ApiError::Other)?;
@@ -881,18 +902,32 @@ fn fetch_script(
     )
 }
 
-pub(crate) async fn evaluate(page: &Page, expr: &str) -> Result<serde_json::Value> {
+/// `Ws`/`ChannelSendError`/`Io` are what a Chrome that has stopped existing produces, and
+/// relaunching is the fix. `JavascriptException` and friends stay `Other`: a page bug must
+/// not trigger relaunches.
+fn cdp_error_to_api_error(what: &str, e: CdpError) -> ApiError {
+    match e {
+        CdpError::Timeout => ApiError::Other(anyhow::anyhow!("{what} timed out")),
+        CdpError::Ws(_) | CdpError::ChannelSendError(_) | CdpError::Io(_) => {
+            ApiError::BrowserGone {
+                detail: format!("{what}: {e}"),
+            }
+        }
+        other => ApiError::Other(anyhow::anyhow!("{what}: {other}")),
+    }
+}
+
+pub(crate) async fn evaluate(page: &Page, expr: &str) -> Result<serde_json::Value, ApiError> {
     let params = EvaluateParams::builder()
         .expression(expr)
         .await_promise(true)
         .return_by_value(true)
         .build()
-        .map_err(|e| anyhow::anyhow!("building EvaluateParams: {e}"))?;
-    let result = match page.evaluate(params).await {
-        Ok(r) => r,
-        Err(CdpError::Timeout) => anyhow::bail!("page evaluation timed out"),
-        Err(e) => return Err(e.into()),
-    };
+        .map_err(|e| ApiError::Other(anyhow::anyhow!("building EvaluateParams: {e}")))?;
+    let result = page
+        .evaluate(params)
+        .await
+        .map_err(|e| cdp_error_to_api_error("page evaluation", e))?;
     Ok(result.value().cloned().unwrap_or(serde_json::Value::Null))
 }
 
@@ -901,18 +936,23 @@ pub(crate) async fn evaluate(page: &Page, expr: &str) -> Result<serde_json::Valu
 async fn navigate_and_clear(page: &Page) -> Result<(), ApiError> {
     page.goto(SHOP_URL)
         .await
-        .map_err(|e| ApiError::Other(anyhow::anyhow!("navigating to {SHOP_URL}: {e}")))?;
+        .map_err(|e| cdp_error_to_api_error(&format!("navigating to {SHOP_URL}"), e))?;
     let deadline = Instant::now() + CLEARANCE_TIMEOUT;
     loop {
         // Ask for the origin as well as the text: readiness is "we are on
         // k-ruoka.fi and nothing is blocking us", not "the SPA has finished
         // hydrating". The same-origin `fetch` only needs the document's origin.
-        let probe = evaluate(
+        let probe = match evaluate(
             page,
             "({ origin: location.origin, text: document.body ? document.body.innerText : null })",
         )
         .await
-        .unwrap_or(serde_json::Value::Null);
+        {
+            Ok(v) => v,
+            // Swallowing this polled a dead browser for the full 45s, then blamed Cloudflare.
+            Err(e @ ApiError::BrowserGone { .. }) => return Err(e),
+            Err(_) => serde_json::Value::Null,
+        };
         let origin = probe["origin"].as_str().unwrap_or_default();
         let text = probe["text"].as_str();
 
@@ -1372,11 +1412,66 @@ mod tests {
         }
     }
 
+    fn browser_gone() -> ApiError {
+        ApiError::BrowserGone {
+            detail: "connection reset".into(),
+        }
+    }
+
     /// A Cloudflare block gets exactly one relaunch, from either failure site.
     #[test]
     fn a_cloudflare_block_is_relaunched_once_then_given_up_on() {
         assert_eq!(plan_recovery(&cf(), false, false), Recovery::Relaunch);
         assert_eq!(plan_recovery(&cf(), true, false), Recovery::GiveUp);
+    }
+
+    /// A dead browser gets the same one-shot relaunch budget as a Cloudflare block.
+    #[test]
+    fn a_dead_browser_is_relaunched_once_then_given_up_on() {
+        assert_eq!(
+            plan_recovery(&browser_gone(), false, false),
+            Recovery::Relaunch
+        );
+        assert_eq!(
+            plan_recovery(&browser_gone(), true, false),
+            Recovery::GiveUp
+        );
+    }
+
+    /// A killed Chrome must reach the retryable variant, not the catch-all.
+    #[test]
+    fn a_dead_transport_is_reported_as_browser_gone() {
+        let io_err = CdpError::Io(std::io::Error::other("connection reset"));
+        assert!(matches!(
+            cdp_error_to_api_error("page evaluation", io_err),
+            ApiError::BrowserGone { .. }
+        ));
+    }
+
+    /// The literal `oneshot canceled` a user sees when Chrome dies mid-call.
+    #[tokio::test]
+    async fn a_canceled_response_channel_is_reported_as_browser_gone() {
+        let (tx, rx) = futures::channel::oneshot::channel::<()>();
+        drop(tx);
+        let canceled = rx.await.unwrap_err();
+        let e = CdpError::ChannelSendError(chromiumoxide::error::ChannelError::Canceled(canceled));
+        assert!(matches!(
+            cdp_error_to_api_error("page evaluation", e),
+            ApiError::BrowserGone { .. }
+        ));
+    }
+
+    /// A script bug must surface, not become an infinite relaunch loop.
+    #[test]
+    fn a_non_transport_cdp_error_stays_the_opaque_other() {
+        assert!(matches!(
+            cdp_error_to_api_error("page evaluation", CdpError::NotFound),
+            ApiError::Other(_)
+        ));
+        assert!(matches!(
+            cdp_error_to_api_error("page evaluation", CdpError::Timeout),
+            ApiError::Other(_)
+        ));
     }
 
     #[test]
