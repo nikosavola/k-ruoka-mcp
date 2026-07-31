@@ -28,10 +28,10 @@ macro_rules! trace_shutdown {
 
 pub async fn serve() -> Result<()> {
     // Before anything else, including startup. Tokio installs the OS handler inside
-    // `signal()` rather than on the first poll, so registering here is what shrinks
-    // the window in which a SIGTERM is fatal down to almost nothing. Doing it lazily
-    // in the `select!` below left `Session::new` inside that window, and it forks
-    // `google-chrome --version`, which is not bounded on a loaded machine.
+    // `signal()` rather than on the first poll, so registering here is what shrinks the
+    // window in which a SIGTERM is fatal down to almost nothing. Startup is cheap now
+    // that the User-Agent is derived lazily, but a signal arriving inside it would still
+    // kill the process outright, and that window is the one thing this ordering closes.
     let mut terminate = TerminateSignals::install();
     trace_shutdown!("signals installed");
 
@@ -45,6 +45,7 @@ pub async fn serve() -> Result<()> {
     // The login tools drive the `login` subcommand as a child process, which needs the
     // session itself (to hand over the profile), not just the API seam.
     let login = Arc::new(ChildLogin::new(Arc::clone(&session)));
+    let login_for_shutdown = Arc::clone(&login);
     let handler = CartServer::with_login(Arc::clone(&session) as Arc<dyn KrApi>, login);
     trace_shutdown!("session built, starting the handshake");
 
@@ -75,7 +76,10 @@ pub async fn serve() -> Result<()> {
     // Close gracefully so Chrome flushes cookies back into the profile; a killed
     // browser can lose the session and force an unnecessary re-login. This is the
     // whole reason for handling the signal, so it must finish before we go.
-    trace_shutdown!("closing the browser");
+    // The login child first: it owns the profile while it runs, and exiting without
+    // stopping it leaves a headful Chrome holding the profile's lock.
+    trace_shutdown!("stopping any login, then closing the browser");
+    login_for_shutdown.shutdown().await;
     session.close().await.ok();
     trace_shutdown!("browser closed, exiting");
 

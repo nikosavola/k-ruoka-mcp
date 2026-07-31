@@ -91,6 +91,19 @@ impl ChildLogin {
             running: Mutex::new(None),
         }
     }
+
+    /// Stop a login that is still running, for `serve`'s own shutdown.
+    ///
+    /// Not part of [`LoginFlow`]: it is not a tool, and it must not report anything to a
+    /// model. `serve` exits with `std::process::exit`, which runs no destructors, so
+    /// `kill_on_drop` never fires -- and the child is in its own process group precisely
+    /// so that a signal to `serve` does not reach it. Without this a client shutting the
+    /// server down mid-login leaves Chrome holding the profile's lock.
+    pub async fn shutdown(&self) {
+        if let Some(mut running) = self.running.lock().await.take() {
+            terminate_group(&mut running.child).await;
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -109,7 +122,12 @@ impl LoginFlow for ChildLogin {
                 progress.instructions = Some(output);
                 return Ok(progress);
             }
+            // The child is gone but nothing has observed that yet, so the session is
+            // still holding the profile for it. Hand it back before asking for it again:
+            // `release_for_login` refuses while the flag is set, and forgetting the
+            // handle here without clearing it left every tool refusing until a restart.
             *slot = None;
+            self.session.resume_after_login().await;
         }
 
         // Hand the profile over before spawning: the child needs the SingletonLock this
@@ -255,6 +273,9 @@ impl LoginFlow for ChildLogin {
     async fn cancel(&self) -> Result<LoginProgress, ApiError> {
         let mut slot = self.running.lock().await;
         let Some(mut running) = slot.take() else {
+            // Unconditional: cancel_login is the documented escape hatch, so it has to
+            // work even when the handle is already gone and only the flag is left.
+            self.session.resume_after_login().await;
             return Ok(LoginProgress::new(
                 "notStarted",
                 "No login was in progress.",
@@ -282,6 +303,19 @@ fn signed_in_account(output: &str) -> Option<String> {
 
 /// Stop the child and everything it started, Chrome included.
 async fn terminate_group(child: &mut Child) {
+    // Chrome is a grandchild, and Windows has no process groups to signal: terminating
+    // only the direct child would leave a headful Chrome holding the profile lock while
+    // the tool reported the browser closed. taskkill /T takes the tree.
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
     #[cfg(unix)]
     if let Some(pid) = child.id() {
         // Negative pid means "the process group", which is why it was spawned into one.
@@ -314,6 +348,39 @@ enum Pipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A session with nothing launched. Cheap and hermetic: `Session::new` touches no
+    /// Chrome, and `release_for_login` with no live browser only moves the flag.
+    fn scratch_session(name: &str) -> Arc<Session> {
+        let profile = std::env::temp_dir().join(format!("k-ruoka-login-flow-{name}"));
+        let _ = std::fs::remove_dir_all(&profile);
+        Arc::new(Session::new(&profile, crate::browser::LaunchMode::Headless).unwrap())
+    }
+
+    /// The flag that makes the cart tools refuse is only cleared by whoever set it, so
+    /// `cancel_login` has to clear it even when there is no child left to kill. Without
+    /// this, a login whose child had already gone left every tool refusing until the
+    /// process was restarted, while telling the caller to run the very tool that could
+    /// not help.
+    #[tokio::test]
+    async fn cancelling_frees_the_profile_even_with_no_child_left() {
+        let session = scratch_session("cancel");
+        session.release_for_login().await.unwrap();
+        assert!(
+            session.release_for_login().await.is_err(),
+            "a second login must be refused while one owns the profile"
+        );
+
+        ChildLogin::new(Arc::clone(&session))
+            .cancel()
+            .await
+            .unwrap();
+
+        session
+            .release_for_login()
+            .await
+            .expect("cancel_login must hand the profile back");
+    }
 
     #[test]
     fn the_account_is_read_out_of_logins_own_output() {
