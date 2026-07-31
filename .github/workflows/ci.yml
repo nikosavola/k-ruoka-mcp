@@ -1,11 +1,12 @@
-# Tests and coverage on every push and pull request.
+# Tests, coverage and lint on every push and pull request.
 #
 # Only the hermetic suite runs here. The live suites need network, Chrome and -- for the
 # account one -- a real K-Plussa login, so they are `#[ignore]`d and stay a local thing.
 # That is also why coverage sits around 70% rather than higher: see the note in the
 # justfile.
 #
-# Lint lives in the git hooks (`just pre-commit`) rather than being duplicated here.
+# Lint also runs here: git hooks alone miss anyone who skipped `prek install`, including
+# the zizmor audit that guards the release pipeline's `id-token: write`.
 name: ci
 
 on:
@@ -87,3 +88,42 @@ jobs:
           # shared-key needs the OS too, or the three matrix jobs fight over one cache slot.
           shared-key: cross-platform-${{ matrix.os }}
       - run: cargo test --all-targets
+
+  # Runs the same hooks as local `prek install` (.pre-commit-config.yaml), so a PR from
+  # someone without hooks installed still gets clippy, zizmor, etc. Skips cargo-test: the
+  # coverage and cross-platform jobs above already run it. rustfmt/clippy ship with the
+  # runner's rustup toolchain; `just` (for the just-fmt hook) doesn't, so it's installed here.
+  lint:
+    name: Lint (pre-commit hooks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The just-fmt hook shells out to it; rustfmt and clippy come from the runner.
+      - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
+        with:
+          tool: just
+
+      # No token in this step's environment on purpose. It runs cargo-clippy, which
+      # compiles the pull request's code and so executes its build scripts and proc macros.
+      # The action passes --show-diff-on-failure itself, which matters because the
+      # formatters rewrite in place on a runner that is then thrown away.
+      - name: Run pre-commit hooks
+        uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
+        with:
+          prek-version: "0.4.11"
+          extra-args: --all-files --skip cargo-test --skip zizmor
+
+      # Separate, so the token reaches zizmor and nothing else. With it the online audits
+      # resolve actions against the GitHub API instead of quietly degrading to offline.
+      - name: Audit the workflows
+        uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          prek-version: "0.4.11"
+          extra-args: --all-files zizmor
