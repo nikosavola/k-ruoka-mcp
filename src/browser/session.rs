@@ -1029,13 +1029,10 @@ fn chrome_version() -> Result<String> {
     let path = chrome_path();
 
     // Not asked on Windows at all. `chrome.exe --version` there does not print a version
-    // and does not exit, so `output()` waits for a process that never finishes: this hung
-    // startup outright rather than falling through to the directory read below.
+    // and does not exit, so waiting on it hung startup rather than falling through to the
+    // directory read below.
     #[cfg(not(windows))]
-    if let Ok(out) = std::process::Command::new(&path).arg("--version").output()
-        && let Ok(stdout) = String::from_utf8(out.stdout)
-        && let Some(version) = first_version_token(&stdout)
-    {
+    if let Some(version) = version_from_probe(&path) {
         return Ok(version);
     }
 
@@ -1052,6 +1049,48 @@ fn chrome_version() -> Result<String> {
     )
 }
 
+/// How long `chrome --version` gets before it is treated as unable to answer.
+///
+/// Bounded because an unbounded wait here is what hung Windows startup, and the same
+/// shape is reachable elsewhere: a wrapper script that stalls, or a `K_RUOKA_CHROME`
+/// pointing at something that reads stdin. This now runs inside `launch`, which holds the
+/// session lock, so hanging here would also block the graceful shutdown behind it.
+#[cfg(not(windows))]
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Ask the binary for its version, giving up rather than waiting forever.
+#[cfg(not(windows))]
+fn version_from_probe(path: &str) -> Option<String> {
+    // stdin is the JSON-RPC channel in `serve`; a child that reads it would consume
+    // protocol traffic, so it gets nothing.
+    let mut child = std::process::Command::new(path)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let deadline = Instant::now() + VERSION_PROBE_TIMEOUT;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let mut stdout = String::new();
+                use std::io::Read;
+                child.stdout.take()?.read_to_string(&mut stdout).ok()?;
+                return first_version_token(&stdout);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => return None,
+        }
+    }
+    // Still running, so it is never going to answer. Leaving it would keep a stray
+    // process around for the life of the server.
+    let _ = child.kill();
+    let _ = child.wait();
+    None
+}
+
 fn first_version_token(text: &str) -> Option<String> {
     text.split_whitespace()
         .find(|token| {
@@ -1063,23 +1102,34 @@ fn first_version_token(text: &str) -> Option<String> {
 /// A `150.0.7871.181`-shaped sibling directory of the executable.
 fn version_from_install_dir(exe: &Path) -> Option<String> {
     let dir = exe.parent()?;
-    let mut best: Option<String> = None;
-    for entry in std::fs::read_dir(dir).ok()? {
-        let entry = entry.ok()?;
-        if !entry.file_type().ok()?.is_dir() {
+    let mut best: Option<(Vec<u64>, String)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        // One unreadable entry must not abandon a version already found.
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        // Four dot-separated numbers: Chrome's scheme, and unlikely to collide.
-        let looks_like_a_version = name.split('.').count() == 4
-            && name
-                .split('.')
-                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
-        if looks_like_a_version && best.as_deref() < Some(name.as_str()) {
-            best = Some(name);
+        let Some(parts) = version_parts(&name) else {
+            continue;
+        };
+        // Compared as numbers, not as text: Chrome keeps the previous build until it
+        // restarts, and 138.0.7204.97 sorts *above* 138.0.7204.183 as a string, which
+        // would pick the older one and advertise a version that is not running.
+        if best.as_ref().is_none_or(|(seen, _)| seen < &parts) {
+            best = Some((parts, name));
         }
     }
-    best
+    best.map(|(_, name)| name)
+}
+
+/// Chrome's four-number scheme, e.g. `150.0.7871.181`. `None` for anything else, which
+/// is how the executable's other siblings are skipped.
+fn version_parts(name: &str) -> Option<Vec<u64>> {
+    let parts: Vec<&str> = name.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    parts.iter().map(|p| p.parse::<u64>().ok()).collect()
 }
 
 /// The profile holds a live login. Treat it like a credential: 0700, and refuse
@@ -1147,6 +1197,42 @@ fn platform_data_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows has nothing else to fall back on: `chrome.exe --version` is not asked
+    /// there, so this read is the whole version lookup on that platform.
+    #[test]
+    fn the_chrome_version_is_read_from_a_sibling_install_directory() {
+        let root = std::env::temp_dir().join("k-ruoka-version-dir-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let app = root.join("Application");
+        // 97 against 183 is the pair a string comparison gets wrong, and two builds
+        // coexisting is the normal state until Chrome restarts after an update.
+        for name in [
+            "138.0.7204.183",
+            "138.0.7204.97",
+            "Dictionaries",
+            "SetupMetrics",
+        ] {
+            std::fs::create_dir_all(app.join(name)).unwrap();
+        }
+        let exe = app.join("chrome.exe");
+        std::fs::write(&exe, b"").unwrap();
+
+        assert_eq!(
+            version_from_install_dir(&exe).as_deref(),
+            Some("138.0.7204.183"),
+            "the newest four-part directory, ignoring Chrome's other siblings"
+        );
+
+        std::fs::remove_dir_all(app.join("138.0.7204.183")).unwrap();
+        std::fs::remove_dir_all(app.join("138.0.7204.97")).unwrap();
+        assert_eq!(
+            version_from_install_dir(&exe),
+            None,
+            "no version directory is a failure to report, not a version to invent"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn raw(status: u16, body: &str, ct: &str, cf: Option<&str>) -> RawResponse {
         RawResponse {
