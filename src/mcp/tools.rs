@@ -1,6 +1,6 @@
 //! The cart tool surface.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ContentBlock, Implementation, IntoContents, ServerCapabilities, ServerInfo};
@@ -17,15 +17,35 @@ use crate::browser::session::ApiError;
 use crate::login_flow::{LoginFlow, LoginProgress};
 use crate::types::{CartView, DEFAULT_UNIT, ProductSearchView, StoreSearchView};
 
-/// Hand-copied onto four argument structs before, in two different wordings.
+/// Used on argument structs where the caller must always supply a store id.
 const STORE_ID_DESC: &str = "K-Ruoka store id, e.g. \"N137\" for K-Citymarket Helsinki \
                              Ruoholahti. A cart belongs to a store. Use search_stores to \
                              find one.";
 
+/// Used on argument structs where the store id may be omitted when a default has been set.
+const STORE_ID_OPT_DESC: &str = "K-Ruoka store id, e.g. \"N137\" for K-Citymarket Helsinki \
+                                  Ruoholahti. A cart belongs to a store. Use search_stores to \
+                                  find one. May be omitted if a default store was set with \
+                                  set_default_store.";
+
+/// Used by tools that take a required store id (e.g. `set_default_store`).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct StoreArg {
+    #[schemars(description = STORE_ID_OPT_DESC)]
+    pub store_id: Option<String>,
+}
+
+/// Used by `set_default_store`, where the store id is always required.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetDefaultStoreArg {
     #[schemars(description = STORE_ID_DESC)]
     pub store_id: String,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultStoreStatus {
+    pub default_store: String,
 }
 
 const LIMIT_DESC: &str = "How many results to return. Defaults to 10, capped at 50.";
@@ -46,8 +66,8 @@ pub struct StartLoginArg {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SearchProductsArg {
-    #[schemars(description = STORE_ID_DESC)]
-    pub store_id: String,
+    #[schemars(description = STORE_ID_OPT_DESC)]
+    pub store_id: Option<String>,
     #[schemars(
         description = "What to search for, in Finnish -- the catalogue is Finnish, so \
                               \"maito\" finds far more than \"milk\". Free text, e.g. \
@@ -71,8 +91,8 @@ pub struct SearchStoresArg {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AddArg {
-    #[schemars(description = STORE_ID_DESC)]
-    pub store_id: String,
+    #[schemars(description = STORE_ID_OPT_DESC)]
+    pub store_id: Option<String>,
     #[schemars(description = "Product EAN barcode. Use search_products to find one.")]
     pub ean: String,
     #[schemars(
@@ -97,8 +117,8 @@ pub struct AddArg {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct UpdateArg {
-    #[schemars(description = STORE_ID_DESC)]
-    pub store_id: String,
+    #[schemars(description = STORE_ID_OPT_DESC)]
+    pub store_id: Option<String>,
     #[schemars(
         description = "The basket item id from get_cart's `itemId` -- NOT the EAN. \
                               Call get_cart first to resolve it."
@@ -119,8 +139,8 @@ pub struct UpdateArg {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RemoveArg {
-    #[schemars(description = STORE_ID_DESC)]
-    pub store_id: String,
+    #[schemars(description = STORE_ID_OPT_DESC)]
+    pub store_id: Option<String>,
     #[schemars(
         description = "The basket item id from get_cart's `itemId` -- NOT the EAN. \
                               Call get_cart first to resolve it."
@@ -155,6 +175,9 @@ pub struct CartServer {
     /// so rather than being absent, since a missing tool is harder to explain than one
     /// that tells you why it cannot help.
     login: Option<Arc<dyn LoginFlow>>,
+    /// Shared across all clones so a `set_default_store` call persists for the life
+    /// of the server, regardless of which clone handles the next tool call.
+    default_store: Arc<Mutex<Option<String>>>,
     /// Read by the `#[tool_handler]`-generated `call_tool`/`list_tools`, which
     /// dead-code analysis does not see through.
     #[allow(dead_code)]
@@ -166,6 +189,7 @@ impl CartServer {
         Self {
             api,
             login: None,
+            default_store: Arc::new(Mutex::new(None)),
             tool_router: Self::tool_router(),
         }
     }
@@ -174,6 +198,7 @@ impl CartServer {
         Self {
             api,
             login: Some(login),
+            default_store: Arc::new(Mutex::new(None)),
             tool_router: Self::tool_router(),
         }
     }
@@ -186,6 +211,20 @@ impl CartServer {
                     .to_string(),
             )
         })
+    }
+
+    /// Resolve a store id: use the explicitly-provided one if present, otherwise fall
+    /// back to the session default, or fail with a clear instruction.
+    fn resolve_store(&self, provided: Option<String>) -> Result<String, ToolFailure> {
+        provided
+            .or_else(|| self.default_store.lock().unwrap().clone())
+            .ok_or_else(|| {
+                ToolFailure(
+                    "No store_id provided and no default store has been set. \
+                    Call set_default_store first, or pass store_id explicitly."
+                       .to_string(),
+                )
+            })
     }
 
     fn cart(&self) -> Cart<'_> {
@@ -284,6 +323,24 @@ impl CartServer {
     }
 
     #[tool(
+        annotations(title = "Set default store", read_only_hint = false, idempotent_hint = true),
+        description = "Set a default store for the session so other tools can omit \
+                       store_id. Once set, any tool that takes a store_id will use this \
+                       value when store_id is not explicitly provided. Use search_stores \
+                       to find a store_id. The default is scoped to this server process \
+                       and is not persisted across restarts."
+    )]
+    async fn set_default_store(
+        &self,
+        Parameters(SetDefaultStoreArg { store_id }): Parameters<SetDefaultStoreArg>,
+    ) -> Result<Json<DefaultStoreStatus>, ToolFailure> {
+        *self.default_store.lock().unwrap() = Some(store_id.clone());
+        Ok(Json(DefaultStoreStatus {
+            default_store: store_id,
+        }))
+    }
+
+    #[tool(
         annotations(
             title = "Search products",
             read_only_hint = true,
@@ -298,9 +355,10 @@ impl CartServer {
         &self,
         Parameters(arg): Parameters<SearchProductsArg>,
     ) -> Result<Json<ProductSearchView>, ToolFailure> {
+        let store_id = self.resolve_store(arg.store_id)?;
         let found = self
             .catalog()
-            .search_products(&arg.store_id, &arg.query, arg.limit)
+            .search_products(&store_id, &arg.query, arg.limit)
             .await
             .map_err(to_tool_failure)?;
         Ok(Json(found.into()))
@@ -335,6 +393,7 @@ impl CartServer {
         &self,
         Parameters(StoreArg { store_id }): Parameters<StoreArg>,
     ) -> Result<Json<CartView>, ToolFailure> {
+        let store_id = self.resolve_store(store_id)?;
         let basket = self
             .cart()
             .active(&store_id)
@@ -355,10 +414,11 @@ impl CartServer {
         &self,
         Parameters(arg): Parameters<AddArg>,
     ) -> Result<Json<CartView>, ToolFailure> {
+        let store_id = self.resolve_store(arg.store_id)?;
         let basket = self
             .cart()
             .add(
-                &arg.store_id,
+                &store_id,
                 &arg.ean,
                 arg.quantity.unwrap_or(1.0),
                 arg.unit.as_deref().unwrap_or(DEFAULT_UNIT),
@@ -380,10 +440,11 @@ impl CartServer {
         &self,
         Parameters(arg): Parameters<UpdateArg>,
     ) -> Result<Json<CartView>, ToolFailure> {
+        let store_id = self.resolve_store(arg.store_id)?;
         let basket = self
             .cart()
             .set_amount(
-                &arg.store_id,
+                &store_id,
                 &arg.item_id,
                 arg.quantity,
                 arg.unit.as_deref(),
@@ -402,9 +463,10 @@ impl CartServer {
         &self,
         Parameters(arg): Parameters<RemoveArg>,
     ) -> Result<Json<CartView>, ToolFailure> {
+        let store_id = self.resolve_store(arg.store_id)?;
         let basket = self
             .cart()
-            .remove(&arg.store_id, &arg.item_id)
+            .remove(&store_id, &arg.item_id)
             .await
             .map_err(to_tool_failure)?;
         Ok(Json(basket.into()))
@@ -422,6 +484,7 @@ impl CartServer {
         &self,
         Parameters(StoreArg { store_id }): Parameters<StoreArg>,
     ) -> Result<Json<CartView>, ToolFailure> {
+        let store_id = self.resolve_store(store_id)?;
         let basket = self
             .cart()
             .clear(&store_id)
@@ -485,12 +548,14 @@ impl ServerHandler for CartServer {
             ))
             .with_instructions(
                 "Manages the shopping cart of one K-Ruoka (k-ruoka.fi) account.\n\n\
-             Every tool needs a `store_id` (e.g. \"N137\"); a cart belongs to a store. Use \
-             `search_stores` to find one. Products are added by EAN barcode, which \
-             `search_products` returns -- search in Finnish, since the catalogue is Finnish. \
-             `update_cart_item` and `remove_from_cart` instead take a basket `itemId`, which \
-             only exists once an item is in the cart and is NOT the EAN -- get it from \
-             `get_cart`.\n\n\
+             Every tool that operates on a store accepts a `store_id` (e.g. \"N137\"); a \
+             cart belongs to a store. Use `search_stores` to find one. Call \
+             `set_default_store` once to avoid repeating it on every subsequent call -- \
+             after that, tools will use the default when store_id is omitted. Products are \
+             added by EAN barcode, which `search_products` returns -- search in Finnish, \
+             since the catalogue is Finnish. `update_cart_item` and `remove_from_cart` \
+             instead take a basket `itemId`, which only exists once an item is in the cart \
+             and is NOT the EAN -- get it from `get_cart`.\n\n\
              If `auth_status` says the session is not signed in, the cart reachable is an \
              anonymous one rather than the user's. Call `start_login` and relay its \
              instructions verbatim, then poll `login_status`. Credentials are never \

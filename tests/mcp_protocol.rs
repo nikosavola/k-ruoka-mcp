@@ -65,6 +65,7 @@ async fn advertises_itself_and_its_tools() -> anyhow::Result<()> {
             "remove_from_cart",
             "search_products",
             "search_stores",
+            "set_default_store",
             "start_login",
             "update_cart_item"
         ]
@@ -99,18 +100,17 @@ async fn tool_schemas_mark_the_right_arguments_required() -> anyhow::Result<()> 
         r
     };
 
-    assert_eq!(required(&schema_of("get_cart")), ["store_id"]);
-    // quantity/unit/local_store_id/allow_substitutes all default.
-    assert_eq!(required(&schema_of("add_to_cart")), ["ean", "store_id"]);
+    assert_eq!(required(&schema_of("get_cart")), [] as [&str; 0]);
+    // quantity/unit/local_store_id/allow_substitutes all default; store_id falls back to default.
+    assert_eq!(required(&schema_of("add_to_cart")), ["ean"]);
     // quantity is NOT optional here: there is no sensible default for "set to".
     assert_eq!(
         required(&schema_of("update_cart_item")),
-        ["item_id", "quantity", "store_id"]
+        ["item_id", "quantity"]
     );
-    assert_eq!(
-        required(&schema_of("remove_from_cart")),
-        ["item_id", "store_id"]
-    );
+    assert_eq!(required(&schema_of("remove_from_cart")), ["item_id"]);
+    // set_default_store always requires a store_id.
+    assert_eq!(required(&schema_of("set_default_store")), ["store_id"]);
 
     // The itemId-is-not-an-EAN warning has to be on the tools that take one, since
     // that is the mistake a caller is most likely to make.
@@ -831,9 +831,7 @@ async fn invalid_store_id_is_named_back_to_the_caller() -> anyhow::Result<()> {
 async fn missing_required_arguments_are_rejected_before_any_request() -> anyhow::Result<()> {
     let (client, api) = connect(MockApi::new()).await?;
 
-    call_tool(&client, "get_cart", json!({}))
-        .await
-        .expect_err("store_id is required");
+    // store_id is now optional (falls back to the default); ean is still required.
     call_tool(&client, "add_to_cart", json!({"store_id": STORE}))
         .await
         .expect_err("ean is required");
@@ -979,4 +977,105 @@ async fn an_unknown_tool_is_a_protocol_error() -> anyhow::Result<()> {
         Err(Failure::Protocol(_)) => Ok(()),
         other => panic!("expected a protocol error, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Default store
+// ---------------------------------------------------------------------------
+
+/// Once set, subsequent tool calls may omit store_id and the default is used.
+#[tokio::test]
+async fn set_default_store_makes_store_id_optional_on_other_tools() -> anyhow::Result<()> {
+    let (client, api) = connect(MockApi::new().with_item(BANANA, 2.0, "kpl")).await?;
+
+    let result = call_tool(
+        &client,
+        "set_default_store",
+        json!({"store_id": STORE}),
+    )
+    .await
+    .expect("set_default_store should succeed");
+    assert_eq!(result["defaultStore"], STORE);
+
+    // All store-sensitive tools can now omit store_id.
+    let cart = call_tool(&client, "get_cart", json!({}))
+        .await
+        .expect("get_cart should use the default store");
+    assert_eq!(cart["store"]["id"], STORE);
+
+    let cart = call_tool(&client, "add_to_cart", json!({"ean": BANANA}))
+        .await
+        .expect("add_to_cart should use the default store");
+    assert_eq!(cart["store"]["id"], STORE);
+
+    call_tool(
+        &client,
+        "update_cart_item",
+        json!({"item_id": BANANA, "quantity": 3}),
+    )
+    .await
+    .expect("update_cart_item should use the default store");
+
+    call_tool(&client, "remove_from_cart", json!({"item_id": BANANA}))
+        .await
+        .expect("remove_from_cart should use the default store");
+
+    // Add one back and clear.
+    call_tool(&client, "add_to_cart", json!({"ean": BANANA}))
+        .await
+        .unwrap();
+    call_tool(&client, "clear_cart", json!({}))
+        .await
+        .expect("clear_cart should use the default store");
+
+    assert_eq!(api.mutations().len(), 5, "{:?}", api.mutations());
+    Ok(())
+}
+
+/// An explicit store_id takes precedence over the default.
+#[tokio::test]
+async fn explicit_store_id_overrides_the_default() -> anyhow::Result<()> {
+    let (client, api) = connect(MockApi::new()).await?;
+
+    call_tool(&client, "set_default_store", json!({"store_id": "DEFAULT"}))
+        .await
+        .unwrap();
+
+    call_tool(&client, "get_cart", json!({"store_id": STORE}))
+        .await
+        .unwrap();
+
+    // The storeId in the request body must be the explicit one, not the default.
+    let calls = api.calls();
+    let body = calls[0].body.as_ref().unwrap();
+    assert_eq!(body["storeId"], STORE, "explicit store_id not sent");
+    assert_ne!(body["storeId"], "DEFAULT", "default leaked into request");
+    Ok(())
+}
+
+/// Without a default set, omitting store_id returns a clear tool error.
+#[tokio::test]
+async fn omitting_store_id_without_a_default_is_a_tool_error() -> anyhow::Result<()> {
+    let (client, api) = connect(MockApi::new()).await?;
+
+    // No API call should be made: the error is detected before the request.
+    let err = call_tool(&client, "get_cart", json!({}))
+        .await
+        .expect_err("should fail without a default store");
+    assert!(
+        err.contains("set_default_store"),
+        "should name the remedy: {err}"
+    );
+    assert!(api.calls().is_empty(), "{:?}", api.calls());
+    Ok(())
+}
+
+/// set_default_store with no store_id is a schema error (the field is required).
+#[tokio::test]
+async fn set_default_store_requires_store_id() -> anyhow::Result<()> {
+    let (client, _) = connect(MockApi::new()).await?;
+    call_tool(&client, "set_default_store", json!({}))
+        .await
+        .expect_err("store_id is required for set_default_store");
+    Ok(())
 }
