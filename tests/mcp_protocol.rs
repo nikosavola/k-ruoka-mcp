@@ -355,6 +355,26 @@ async fn get_cart_summarises_the_basket() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A per-piece item must still carry `priceIsApproximate: false` rather than omitting
+/// the field: the field is declared `required` in the output schema, so a client that
+/// validates structured output against it rejects the whole cart if the field is
+/// missing on any item.
+#[tokio::test]
+async fn get_cart_reports_price_is_approximate_false_for_a_per_piece_item() -> anyhow::Result<()> {
+    let (client, _api) = connect(MockApi::new().with_item(BANANA, 2.0, "kpl")).await?;
+
+    let cart = call_tool(&client, "get_cart", json!({"store_id": STORE}))
+        .await
+        .unwrap_or_else(|e| panic!("get_cart failed: {e}"));
+    assert_eq!(
+        cart["items"][0].get("priceIsApproximate"),
+        Some(&json!(false)),
+        "priceIsApproximate must be present and false, not omitted: {}",
+        cart["items"][0]
+    );
+    Ok(())
+}
+
 /// An anonymous session gets a valid basket rather than a 401, so "the call worked"
 /// is not evidence of being signed in.
 #[tokio::test]

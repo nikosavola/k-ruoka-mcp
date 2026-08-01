@@ -189,7 +189,9 @@ fn basket_json(state: &State) -> Value {
                     "id": id, "ean": ean,
                     "name": {"finnish": "Pirkka banaani", "english": "Pirkka banana"},
                     "amountInfo": {"amount": amount, "unit": unit},
-                    "pricing": {"price": 0.29, "unit": "kg", "isApproximate": true},
+                    // Real weight-priced items carry unit "kg" and isApproximate true;
+                    // everything else is priced per piece and must NOT be approximate.
+                    "pricing": {"price": 0.29, "unit": "kg", "isApproximate": unit == "kg"},
                     "allowSubstitutes": true,
                     "productDetails": {
                         "attributes": {"ean": ean}, "availability": {},

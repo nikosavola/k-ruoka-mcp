@@ -247,7 +247,6 @@ pub struct CartItemView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price_unit: Option<String>,
     /// Weight-priced item: the final charge is settled when the order is picked.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub price_is_approximate: bool,
 }
 
@@ -379,7 +378,6 @@ pub struct ProductView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison_price: Option<String>,
     /// Weight-priced: the final charge is settled when the order is picked.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub price_is_approximate: bool,
     /// `false` means the EAN is real but not buyable at this store right now.
     pub is_available: bool,
