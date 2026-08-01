@@ -191,18 +191,21 @@ so the server itself starts instantly.
 ## Tools
 
 Every cart tool takes a `store_id`, because a cart belongs to a store (e.g. `N137` is
-K-Citymarket Helsinki Ruoholahti). `search_stores` is how you find one.
+K-Citymarket Helsinki Ruoholahti). `search_stores` is how you find one. Call
+`set_default_store` once to set it for the rest of the process and omit it on every
+later call; an explicit `store_id` still overrides the default.
 
 | tool | notes |
 |---|---|
-| `search_products(store_id, query, limit?)` | Read-only. Finds EANs by name, which is what `add_to_cart` needs. Search in Finnish. |
+| `set_default_store(store_id)` | Sets the store used when later calls omit `store_id`. Scoped to this server process, not persisted across restarts. |
+| `search_products(store_id?, query, limit?)` | Read-only. Finds EANs by name, which is what `add_to_cart` needs. Search in Finnish. |
 | `search_stores(query, limit?)` | Read-only. Finds the `store_id` every other tool needs. |
-| `get_cart(store_id)` | Read-only. The only source of `itemId` values. |
-| `add_to_cart(store_id, ean, quantity?, unit?, local_store_id?, allow_substitutes?)` | By EAN. `quantity` is the resulting amount, not an increment. Defaults to 1, `unit` to `kpl`. |
-| `update_cart_item(store_id, item_id, quantity, unit?)` | Sets an exact quantity. 0 removes. `unit` defaults to the item's existing one. |
-| `remove_from_cart(store_id, item_id)` | |
-| `clear_cart(store_id)` | Empties the cart. Not undoable. |
-| `auth_status(store_id)` | Whether the stored session is still signed in. |
+| `get_cart(store_id?)` | Read-only. The only source of `itemId` values. |
+| `add_to_cart(store_id?, ean, quantity?, unit?, local_store_id?, allow_substitutes?)` | By EAN. `quantity` is the resulting amount, not an increment. Defaults to 1, `unit` to `kpl`. |
+| `update_cart_item(store_id?, item_id, quantity, unit?)` | Sets an exact quantity. 0 removes. `unit` defaults to the item's existing one. |
+| `remove_from_cart(store_id?, item_id)` | |
+| `clear_cart(store_id?)` | Empties the cart. Not undoable. |
+| `auth_status(store_id?)` | Whether the stored session is still signed in. |
 | `start_login(port?)` | Opens a browser for the user to sign in, and returns the instructions to relay. |
 | `login_status()` | `waiting`, `signedIn`, `failed` or `notStarted`. |
 | `cancel_login()` | Gives up on a login in progress and closes its browser. |

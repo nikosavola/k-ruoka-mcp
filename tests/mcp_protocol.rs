@@ -904,6 +904,8 @@ async fn tools_declare_their_read_only_and_destructive_hints() -> anyhow::Result
     assert_eq!(ann("clear_cart").read_only_hint, None);
     // Setting a quantity only ever adds or adjusts one line.
     assert_eq!(ann("add_to_cart").destructive_hint, Some(false));
+    // A local state write, not a cart mutation.
+    assert_eq!(ann("set_default_store").destructive_hint, Some(false));
     Ok(())
 }
 
@@ -988,13 +990,9 @@ async fn an_unknown_tool_is_a_protocol_error() -> anyhow::Result<()> {
 async fn set_default_store_makes_store_id_optional_on_other_tools() -> anyhow::Result<()> {
     let (client, api) = connect(MockApi::new().with_item(BANANA, 2.0, "kpl")).await?;
 
-    let result = call_tool(
-        &client,
-        "set_default_store",
-        json!({"store_id": STORE}),
-    )
-    .await
-    .expect("set_default_store should succeed");
+    let result = call_tool(&client, "set_default_store", json!({"store_id": STORE}))
+        .await
+        .expect("set_default_store should succeed");
     assert_eq!(result["defaultStore"], STORE);
 
     // All store-sensitive tools can now omit store_id.
@@ -1050,6 +1048,26 @@ async fn explicit_store_id_overrides_the_default() -> anyhow::Result<()> {
     let body = calls[0].body.as_ref().unwrap();
     assert_eq!(body["storeId"], STORE, "explicit store_id not sent");
     assert_ne!(body["storeId"], "DEFAULT", "default leaked into request");
+    Ok(())
+}
+
+/// `auth_status` also falls back to the default store when one has been set, rather
+/// than always probing `DEFAULT_PROBE_STORE`.
+#[tokio::test]
+async fn auth_status_uses_the_default_store_when_set() -> anyhow::Result<()> {
+    let (client, api) = connect(MockApi::new()).await?;
+
+    call_tool(&client, "set_default_store", json!({"store_id": STORE}))
+        .await
+        .unwrap();
+
+    call_tool(&client, "auth_status", json!({}))
+        .await
+        .expect("auth_status should use the default store");
+
+    let calls = api.calls();
+    let body = calls[0].body.as_ref().unwrap();
+    assert_eq!(body["storeId"], STORE, "default store not sent");
     Ok(())
 }
 

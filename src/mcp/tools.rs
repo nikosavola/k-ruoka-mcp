@@ -28,7 +28,8 @@ const STORE_ID_OPT_DESC: &str = "K-Ruoka store id, e.g. \"N137\" for K-Citymarke
                                   find one. May be omitted if a default store was set with \
                                   set_default_store.";
 
-/// Used by tools that take a required store id (e.g. `set_default_store`).
+/// Used by tools whose only argument is a store id that may fall back to the default
+/// (`get_cart`, `clear_cart`).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct StoreArg {
     #[schemars(description = STORE_ID_OPT_DESC)]
@@ -222,7 +223,7 @@ impl CartServer {
                 ToolFailure(
                     "No store_id provided and no default store has been set. \
                     Call set_default_store first, or pass store_id explicitly."
-                       .to_string(),
+                        .to_string(),
                 )
             })
     }
@@ -323,7 +324,13 @@ impl CartServer {
     }
 
     #[tool(
-        annotations(title = "Set default store", read_only_hint = false, idempotent_hint = true),
+        // A local state write, not a cart mutation.
+        annotations(
+            title = "Set default store",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
         description = "Set a default store for the session so other tools can omit \
                        store_id. Once set, any tool that takes a store_id will use this \
                        value when store_id is not explicitly provided. Use search_stores \
@@ -443,12 +450,7 @@ impl CartServer {
         let store_id = self.resolve_store(arg.store_id)?;
         let basket = self
             .cart()
-            .set_amount(
-                &store_id,
-                &arg.item_id,
-                arg.quantity,
-                arg.unit.as_deref(),
-            )
+            .set_amount(&store_id, &arg.item_id, arg.quantity, arg.unit.as_deref())
             .await
             .map_err(to_tool_failure)?;
         Ok(Json(basket.into()))
@@ -504,7 +506,9 @@ impl CartServer {
         &self,
         Parameters(AuthArg { store_id }): Parameters<AuthArg>,
     ) -> Result<Json<AuthStatus>, ToolFailure> {
-        let store_id = store_id.unwrap_or_else(|| crate::login::DEFAULT_PROBE_STORE.to_string());
+        let store_id = store_id
+            .or_else(|| self.default_store.lock().unwrap().clone())
+            .unwrap_or_else(|| crate::login::DEFAULT_PROBE_STORE.to_string());
         match self.cart().active(&store_id).await {
             Ok(basket) => {
                 let account = basket.user_info.display();
