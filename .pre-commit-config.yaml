@@ -115,15 +115,16 @@ repos:
     hooks:
       - id: hadolint-docker
         priority: check
+        exclude: \.dockerignore$
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:
-      # The only shell here is docker-entrypoint.sh; the CI/hook shell one-liners in
+      # The only shell here is docker/docker-entrypoint.sh; the CI/hook shell one-liners in
       # the workflows are actionlint's job, not this one's.
       - id: shellcheck
         priority: check
-        files: ^docker-entrypoint\.sh$
+        files: ^docker/docker-entrypoint\.sh$
 
   - repo: https://github.com/adrienverge/yamllint.git
     rev: v1.38.0

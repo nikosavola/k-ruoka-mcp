@@ -19,9 +19,9 @@ on:
     # Everything that ends up inside the image, entrypoint included. A push touching
     # only docs or tests does not change the image, so it does not rebuild it.
     paths:
-      - Dockerfile
-      - .dockerignore
-      - docker-entrypoint.sh
+      - docker/Dockerfile
+      - docker/Dockerfile.dockerignore
+      - docker/docker-entrypoint.sh
       - Cargo.toml
       - Cargo.lock
       - src/**
@@ -29,9 +29,9 @@ on:
       - .github/workflows/docker_smoke_test.py
   pull_request:
     paths:
-      - Dockerfile
-      - .dockerignore
-      - docker-entrypoint.sh
+      - docker/Dockerfile
+      - docker/Dockerfile.dockerignore
+      - docker/docker-entrypoint.sh
       - Cargo.toml
       - Cargo.lock
       - src/**
@@ -83,6 +83,7 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          file: docker/Dockerfile
           platforms: linux/${{ matrix.arch }}
           tags: k-ruoka-mcp:pr-smoke-${{ matrix.arch }}
           outputs: type=docker
@@ -139,6 +140,7 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          file: docker/Dockerfile
           platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMG }},push-by-digest=true,name-canonical=true,push=true

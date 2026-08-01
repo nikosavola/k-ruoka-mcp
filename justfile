@@ -154,7 +154,7 @@ docker_profile_vol := "k-ruoka-mcp-profile"
 # Build the local image (tagged k-ruoka-mcp:dev, distinct from anything published)
 [group('docker')]
 docker-build:
-    docker build -t {{ docker_image }} .
+    docker build -t {{ docker_image }} -f docker/Dockerfile .
 
 # uvx-equivalent smoke test: run it, hold an MCP handshake, no Chrome launch needed
 [group('docker')]

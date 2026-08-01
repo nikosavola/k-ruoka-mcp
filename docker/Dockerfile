@@ -39,7 +39,7 @@ RUN apk add --no-cache chromium tini ca-certificates xvfb xvfb-run socat \
     # ownership Docker would otherwise give a fresh mount point.
     && install -d -o k-ruoka -g k-ruoka /home/k-ruoka/.local/share/k-ruoka-mcp
 COPY --from=builder /build/target/release/k-ruoka-mcp /usr/local/bin/k-ruoka-mcp
-COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chmod=755 docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 USER 1000
 WORKDIR /home/k-ruoka
