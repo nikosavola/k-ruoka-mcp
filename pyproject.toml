@@ -160,6 +160,15 @@ ignore = [
   "T20",
   "TRY003",
 ]
+".github/workflows/docker_smoke_test.py" = [
+  "PLR2004",
+  "S101",
+  "S404",
+  "S603",
+  "S607",
+  "T20",
+  "TRY003",
+]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
