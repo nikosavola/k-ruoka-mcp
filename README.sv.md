@@ -8,14 +8,10 @@
 [![CI](https://github.com/nikosavola/k-ruoka-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/nikosavola/k-ruoka-mcp/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/nikosavola/k-ruoka-mcp/graph/badge.svg)](https://codecov.io/gh/nikosavola/k-ruoka-mcp)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-
-<div align="right">
-
+&nbsp;&nbsp;&nbsp;
 [![en](https://img.shields.io/badge/lang-%F0%9F%87%AC%F0%9F%87%A7_en-red.svg)](./README.md)
 [![fi](https://img.shields.io/badge/lang-%F0%9F%87%AB%F0%9F%87%AE_fi-blue.svg)](./README.fi.md)
 [![sv](https://img.shields.io/badge/lang-%F0%9F%87%B8%F0%9F%87%AA_sv-yellow.svg)](./README.sv.md)
-
-</div>
 
 En MCP-server som hanterar varukorgen för ett [K-Ruoka](https://www.k-ruoka.fi)-konto:
 läsa korgen, lägga till varor, ändra antal, ta bort varor och tömma korgen.
