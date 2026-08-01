@@ -1,8 +1,16 @@
 # k-ruoka-mcp
 
-[![en](https://img.shields.io/badge/lang-en-red.svg)](./README.md)
-[![fi](https://img.shields.io/badge/lang-fi-blue.svg)](./README.fi.md)
-[![sv](https://img.shields.io/badge/lang-sv-yellow.svg)](./README.sv.md)
+[![PyPI version](https://img.shields.io/pypi/v/k-ruoka-mcp.svg)](https://pypi.org/project/k-ruoka-mcp/)
+[![CI](https://github.com/nikosavola/k-ruoka-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/nikosavola/k-ruoka-mcp/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+<div align="right">
+
+[![en](https://img.shields.io/badge/lang-%F0%9F%87%AC%F0%9F%87%A7_en-red.svg)](./README.md)
+[![fi](https://img.shields.io/badge/lang-%F0%9F%87%AB%F0%9F%87%AE_fi-blue.svg)](./README.fi.md)
+[![sv](https://img.shields.io/badge/lang-%F0%9F%87%B8%F0%9F%87%AA_sv-yellow.svg)](./README.sv.md)
+
+</div>
 
 MCP-palvelin, joka hallinnoi yhden [K-Ruoka](https://www.k-ruoka.fi)-tilin ostoskoria:
 lukee korin, lisää tuotteita, muuttaa määriä, poistaa tuotteita ja tyhjentää korin.
@@ -25,6 +33,18 @@ Chromea DevTools-protokollalla, pitää selainprofiilia levyllä ja tekee jokais
 
 Sivusto on Cloudflaren takana. Läpi pääsemiseen riittää yksi asia: User-Agent, joka ei
 sisällä merkkijonoa `HeadlessChrome`. Ei stealth-lisäosia eikä haasteiden ratkomista.
+
+```mermaid
+flowchart LR
+    A[Tekoälyavustaja<br>MCP-asiakas] <-->|JSON-RPC| B(k-ruoka-mcp)
+    
+    subgraph Selainkonteksti
+        B <-->|CDP WebSocket| C[Google Chrome]
+        D[(Profiili ja evästeet)] -.->|Tunnistautuminen| C
+    end
+    
+    C <-->|Saman alkuperän fetch| E[K-Ruoka API<br>Cloudflare]
+```
 
 ## Vaatimukset
 

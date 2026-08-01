@@ -1,8 +1,16 @@
 # k-ruoka-mcp
 
-[![en](https://img.shields.io/badge/lang-en-red.svg)](./README.md)
-[![fi](https://img.shields.io/badge/lang-fi-blue.svg)](./README.fi.md)
-[![sv](https://img.shields.io/badge/lang-sv-yellow.svg)](./README.sv.md)
+[![PyPI version](https://img.shields.io/pypi/v/k-ruoka-mcp.svg)](https://pypi.org/project/k-ruoka-mcp/)
+[![CI](https://github.com/nikosavola/k-ruoka-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/nikosavola/k-ruoka-mcp/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+<div align="right">
+
+[![en](https://img.shields.io/badge/lang-%F0%9F%87%AC%F0%9F%87%A7_en-red.svg)](./README.md)
+[![fi](https://img.shields.io/badge/lang-%F0%9F%87%AB%F0%9F%87%AE_fi-blue.svg)](./README.fi.md)
+[![sv](https://img.shields.io/badge/lang-%F0%9F%87%B8%F0%9F%87%AA_sv-yellow.svg)](./README.sv.md)
+
+</div>
 
 An MCP server that manages the shopping cart of one [K-Ruoka](https://www.k-ruoka.fi)
 (Finnish grocery) account: read the cart, add items, change quantities, remove items,
@@ -29,6 +37,18 @@ The site sits behind Cloudflare. Getting through needs exactly one thing: a
 User-Agent that doesn't contain the token `HeadlessChrome`. No stealth plugin, no
 challenge-solving, no interstitial to wait out. That single fact is why this is pure Rust
 with no browser-automation sidecar.
+
+```mermaid
+flowchart LR
+    A[AI Assistant<br>MCP Client] <-->|JSON-RPC| B(k-ruoka-mcp)
+    
+    subgraph Browser Context
+        B <-->|CDP WebSocket| C[Google Chrome]
+        D[(Profile & Cookies)] -.->|Auth| C
+    end
+    
+    C <-->|Same-origin fetch| E[K-Ruoka API<br>Cloudflare]
+```
 
 ## Requirements
 

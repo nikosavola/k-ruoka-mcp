@@ -1,8 +1,16 @@
 # k-ruoka-mcp
 
-[![en](https://img.shields.io/badge/lang-en-red.svg)](./README.md)
-[![fi](https://img.shields.io/badge/lang-fi-blue.svg)](./README.fi.md)
-[![sv](https://img.shields.io/badge/lang-sv-yellow.svg)](./README.sv.md)
+[![PyPI version](https://img.shields.io/pypi/v/k-ruoka-mcp.svg)](https://pypi.org/project/k-ruoka-mcp/)
+[![CI](https://github.com/nikosavola/k-ruoka-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/nikosavola/k-ruoka-mcp/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+<div align="right">
+
+[![en](https://img.shields.io/badge/lang-%F0%9F%87%AC%F0%9F%87%A7_en-red.svg)](./README.md)
+[![fi](https://img.shields.io/badge/lang-%F0%9F%87%AB%F0%9F%87%AE_fi-blue.svg)](./README.fi.md)
+[![sv](https://img.shields.io/badge/lang-%F0%9F%87%B8%F0%9F%87%AA_sv-yellow.svg)](./README.sv.md)
+
+</div>
 
 En MCP-server som hanterar varukorgen för ett [K-Ruoka](https://www.k-ruoka.fi)-konto:
 läsa korgen, lägga till varor, ändra antal, ta bort varor och tömma korgen.
@@ -25,6 +33,18 @@ K-Ruoka har inget offentligt API. Varukorgen ligger bakom ett privat `/kr-api/` 
 autentiseras enbart med webbläsarens kakor. Servern styr därför en riktig Chrome via
 DevTools-protokollet, sparar en webbläsarprofil på disk och gör varje anrop som ett
 `fetch()` inifrån den laddade sidan.
+
+```mermaid
+flowchart LR
+    A[AI-assistent<br>MCP-klient] <-->|JSON-RPC| B(k-ruoka-mcp)
+    
+    subgraph Webbläsarkontext
+        B <-->|CDP WebSocket| C[Google Chrome]
+        D[(Profil & kakor)] -.->|Autentisering| C
+    end
+    
+    C <-->|Samma-ursprung fetch| E[K-Ruoka API<br>Cloudflare]
+```
 
 ## Krav
 
