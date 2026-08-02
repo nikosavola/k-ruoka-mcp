@@ -7,7 +7,8 @@
 //! session cookies without any manual cookie handling.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -417,6 +418,23 @@ pub struct Session {
     build: Mutex<Option<String>>,
     /// Keeps request volume well below ordinary browsing, whatever the caller does.
     limiter: RateLimiter,
+    /// Last time something touched this session's browser path.
+    last_activity: StdMutex<Instant>,
+    /// Browser operations currently in flight.
+    active_browser_ops: AtomicUsize,
+}
+
+struct BrowserActivity<'a> {
+    session: &'a Session,
+}
+
+impl Drop for BrowserActivity<'_> {
+    fn drop(&mut self) {
+        *self.session.last_activity.lock().unwrap() = Instant::now();
+        self.session
+            .active_browser_ops
+            .fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl Session {
@@ -434,7 +452,15 @@ impl Session {
             next_generation: AtomicU64::new(0),
             build: Mutex::new(None),
             limiter: RateLimiter::new(min_request_interval()),
+            last_activity: StdMutex::new(Instant::now()),
+            active_browser_ops: AtomicUsize::new(0),
         })
+    }
+
+    fn begin_browser_activity(&self) -> BrowserActivity<'_> {
+        self.active_browser_ops.fetch_add(1, Ordering::Relaxed);
+        *self.last_activity.lock().unwrap() = Instant::now();
+        BrowserActivity { session: self }
     }
 
     /// The User-Agent this session presents to Cloudflare.
@@ -575,6 +601,7 @@ impl Session {
     /// so if the human were driving the session's page, the poller would yank it
     /// back to `/kauppa` every few seconds, mid-login. Give them their own tab.
     pub async fn open_extra_page(&self, url: &str) -> Result<Page> {
+        let _activity = self.begin_browser_activity();
         self.ensure_live().await?;
         let guard = self.live.lock().await;
         // See `current_page`: a concurrent `close` can empty the slot legitimately.
@@ -588,6 +615,7 @@ impl Session {
         F: FnOnce(Page) -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
+        let _activity = self.begin_browser_activity();
         self.ensure_live().await?;
         let page = {
             let guard = self.live.lock().await;
@@ -637,6 +665,7 @@ impl Session {
     /// launch another, and let the login process own the profile meanwhile. The login
     /// writes its cookies there, and the next tool call relaunches into them.
     pub async fn release_for_login(&self) -> Result<(), ApiError> {
+        let _activity = self.begin_browser_activity();
         let mut guard = self.live.lock().await;
         self.refuse_if_unavailable()?;
         // Set before the teardown so a concurrent tool call cannot relaunch into the gap.
@@ -654,6 +683,31 @@ impl Session {
     pub async fn resume_after_login(&self) {
         let _guard = self.live.lock().await;
         self.login_in_progress.store(false, Ordering::Relaxed);
+    }
+
+    /// Close an idle browser generation without marking the session closed forever.
+    ///
+    /// Returns true when a live browser was shut down.
+    pub async fn close_if_idle(&self, timeout: Duration) -> Result<bool> {
+        if timeout.is_zero() || self.active_browser_ops.load(Ordering::Relaxed) != 0 {
+            return Ok(false);
+        }
+        if self.last_activity.lock().unwrap().elapsed() < timeout {
+            return Ok(false);
+        }
+        let mut guard = self.live.lock().await;
+        if self.active_browser_ops.load(Ordering::Relaxed) != 0 {
+            return Ok(false);
+        }
+        if self.last_activity.lock().unwrap().elapsed() < timeout {
+            return Ok(false);
+        }
+        if let Some(live) = guard.take() {
+            live.shutdown().await;
+            *self.last_activity.lock().unwrap() = Instant::now();
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Must be called while holding the `live` lock.
@@ -715,6 +769,7 @@ impl Session {
         path: &str,
         body: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, ApiError> {
+        let _activity = self.begin_browser_activity();
         let mut relaunched = false;
         let mut refreshed_build = false;
         let relaunch_would_hurt = relaunch_costs_a_human_their_login(self.mode);
@@ -1687,6 +1742,44 @@ mod tests {
 
         drop(guard);
         closing.await.unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&profile);
+    }
+
+    #[tokio::test]
+    async fn idle_close_is_a_noop_without_a_live_browser() {
+        let profile =
+            std::env::temp_dir().join(format!("k-ruoka-idle-close-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&profile);
+        let session = Session::new(&profile, LaunchMode::Headless).unwrap();
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(
+            !session
+                .close_if_idle(Duration::from_millis(1))
+                .await
+                .unwrap()
+        );
+
+        let _ = std::fs::remove_dir_all(&profile);
+    }
+
+    #[tokio::test]
+    async fn idle_close_waits_while_an_operation_is_in_flight() {
+        let profile =
+            std::env::temp_dir().join(format!("k-ruoka-idle-activity-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&profile);
+        let session = Session::new(&profile, LaunchMode::Headless).unwrap();
+
+        let activity = session.begin_browser_activity();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(
+            !session
+                .close_if_idle(Duration::from_millis(1))
+                .await
+                .unwrap()
+        );
+        drop(activity);
+
         let _ = std::fs::remove_dir_all(&profile);
     }
 

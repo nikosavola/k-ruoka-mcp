@@ -3,6 +3,7 @@
 pub mod tools;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use rmcp::{ServiceExt, transport::stdio};
@@ -26,6 +27,33 @@ macro_rules! trace_shutdown {
     };
 }
 
+fn idle_timeout_from_raw(raw: Option<String>) -> Option<Duration> {
+    match raw {
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(0) => None,
+            Ok(secs) => Some(Duration::from_secs(secs)),
+            Err(_) => {
+                eprintln!(
+                    "k-ruoka-mcp: K_RUOKA_IDLE_TIMEOUT_SECS={raw:?} is not a number \
+                     (expected non-negative integer seconds); idle timeout disabled"
+                );
+                None
+            }
+        },
+        None => None,
+    }
+}
+
+fn idle_timeout() -> Option<Duration> {
+    idle_timeout_from_raw(std::env::var("K_RUOKA_IDLE_TIMEOUT_SECS").ok())
+}
+
+fn idle_check_interval(timeout: Duration) -> Duration {
+    timeout
+        .min(Duration::from_secs(60))
+        .max(Duration::from_secs(1))
+}
+
 pub async fn serve() -> Result<()> {
     // Before anything else, including startup. Tokio installs the OS handler inside
     // `signal()` rather than on the first poll, so registering here is what shrinks the
@@ -35,7 +63,7 @@ pub async fn serve() -> Result<()> {
     let mut terminate = TerminateSignals::install();
     trace_shutdown!("signals installed");
 
-    // One browser for the life of the server. A profile dir supports a single
+    // At most one browser generation at a time. A profile dir supports a single
     // Chrome instance, and relaunching per tool call would be slow and would
     // fight over the profile lock. The browser is launched lazily on the first
     // tool call, so `serve` starts instantly and a client that only lists tools
@@ -47,6 +75,22 @@ pub async fn serve() -> Result<()> {
     let login = Arc::new(ChildLogin::new(Arc::clone(&session)));
     let login_for_shutdown = Arc::clone(&login);
     let handler = CartServer::with_login(Arc::clone(&session) as Arc<dyn KrApi>, login);
+    let idle_watcher = idle_timeout().map(|timeout| {
+        let session = Arc::clone(&session);
+        tokio::spawn(async move {
+            let check_every = idle_check_interval(timeout);
+            loop {
+                tokio::time::sleep(check_every).await;
+                if session.close_if_idle(timeout).await.unwrap_or(false) {
+                    eprintln!(
+                        "k-ruoka-mcp: idle timeout reached after {}s, closing the browser \
+                         cleanly",
+                        timeout.as_secs()
+                    );
+                }
+            }
+        })
+    });
     trace_shutdown!("session built, starting the handshake");
 
     let serving = async {
@@ -72,6 +116,9 @@ pub async fn serve() -> Result<()> {
             Ok(())
         }
     };
+    if let Some(watcher) = idle_watcher {
+        watcher.abort();
+    }
 
     // Close gracefully so Chrome flushes cookies back into the profile; a killed
     // browser can lose the session and force an unnecessary re-login. This is the
@@ -220,3 +267,45 @@ impl_terminate_event!(
     tokio::signal::windows::CtrlClose,
     tokio::signal::windows::CtrlShutdown
 );
+
+#[cfg(test)]
+mod tests {
+    use super::{idle_check_interval, idle_timeout_from_raw};
+    use std::time::Duration;
+
+    #[test]
+    fn idle_timeout_is_disabled_by_default_or_zero() {
+        assert_eq!(idle_timeout_from_raw(None), None);
+        assert_eq!(idle_timeout_from_raw(Some("0".to_string())), None);
+    }
+
+    #[test]
+    fn idle_timeout_accepts_positive_seconds() {
+        assert_eq!(
+            idle_timeout_from_raw(Some("120".to_string())),
+            Some(Duration::from_secs(120))
+        );
+    }
+
+    #[test]
+    fn idle_timeout_rejects_invalid_values() {
+        assert_eq!(idle_timeout_from_raw(Some("abc".to_string())), None);
+        assert_eq!(idle_timeout_from_raw(Some("-1".to_string())), None);
+    }
+
+    #[test]
+    fn idle_checks_are_clamped_to_one_to_sixty_seconds() {
+        assert_eq!(
+            idle_check_interval(Duration::from_millis(200)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            idle_check_interval(Duration::from_secs(10)),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            idle_check_interval(Duration::from_secs(120)),
+            Duration::from_secs(60)
+        );
+    }
+}

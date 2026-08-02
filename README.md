@@ -376,7 +376,9 @@ Env vars: `K_RUOKA_PROFILE` (profile dir), `K_RUOKA_CHROME` (Chrome path),
 `K_RUOKA_USER_AGENT` (override the derived UA, an escape hatch if Chrome changes
 its version format, and the way to provoke a Cloudflare block on purpose).
 `K_RUOKA_MIN_REQUEST_INTERVAL_MS` sets the minimum gap between `/kr-api/` requests
-(default 500; `0` disables the limit).
+(default 500; `0` disables the limit). `K_RUOKA_IDLE_TIMEOUT_SECS` closes an idle
+browser session cleanly after that many seconds (`0` or unset keeps the current
+always-on behavior).
 
 `probe` is the tool for re-deriving the API contract when K-Ruoka changes their
 frontend. It goes through the same `Session` the
