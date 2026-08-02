@@ -457,7 +457,8 @@ impl Session {
         })
     }
 
-    fn begin_browser_activity(&self) -> BrowserActivity<'_> {
+    async fn begin_browser_activity(&self) -> BrowserActivity<'_> {
+        let _guard = self.live.lock().await;
         self.active_browser_ops.fetch_add(1, Ordering::Relaxed);
         *self.last_activity.lock().unwrap() = Instant::now();
         BrowserActivity { session: self }
@@ -601,7 +602,7 @@ impl Session {
     /// so if the human were driving the session's page, the poller would yank it
     /// back to `/kauppa` every few seconds, mid-login. Give them their own tab.
     pub async fn open_extra_page(&self, url: &str) -> Result<Page> {
-        let _activity = self.begin_browser_activity();
+        let _activity = self.begin_browser_activity().await;
         self.ensure_live().await?;
         let guard = self.live.lock().await;
         // See `current_page`: a concurrent `close` can empty the slot legitimately.
@@ -615,7 +616,7 @@ impl Session {
         F: FnOnce(Page) -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
-        let _activity = self.begin_browser_activity();
+        let _activity = self.begin_browser_activity().await;
         self.ensure_live().await?;
         let page = {
             let guard = self.live.lock().await;
@@ -665,7 +666,7 @@ impl Session {
     /// launch another, and let the login process own the profile meanwhile. The login
     /// writes its cookies there, and the next tool call relaunches into them.
     pub async fn release_for_login(&self) -> Result<(), ApiError> {
-        let _activity = self.begin_browser_activity();
+        let _activity = self.begin_browser_activity().await;
         let mut guard = self.live.lock().await;
         self.refuse_if_unavailable()?;
         // Set before the teardown so a concurrent tool call cannot relaunch into the gap.
@@ -769,7 +770,7 @@ impl Session {
         path: &str,
         body: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, ApiError> {
-        let _activity = self.begin_browser_activity();
+        let _activity = self.begin_browser_activity().await;
         let mut relaunched = false;
         let mut refreshed_build = false;
         let relaunch_would_hurt = relaunch_costs_a_human_their_login(self.mode);
@@ -1770,7 +1771,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&profile);
         let session = Session::new(&profile, LaunchMode::Headless).unwrap();
 
-        let activity = session.begin_browser_activity();
+        let activity = session.begin_browser_activity().await;
         tokio::time::sleep(Duration::from_millis(5)).await;
         assert!(
             !session

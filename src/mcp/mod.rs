@@ -116,10 +116,6 @@ pub async fn serve() -> Result<()> {
             Ok(())
         }
     };
-    if let Some(watcher) = idle_watcher {
-        watcher.abort();
-    }
-
     // Close gracefully so Chrome flushes cookies back into the profile; a killed
     // browser can lose the session and force an unnecessary re-login. This is the
     // whole reason for handling the signal, so it must finish before we go.
@@ -132,6 +128,11 @@ pub async fn serve() -> Result<()> {
     trace_shutdown!("stopping any login, then closing the browser");
     login_for_shutdown.shutdown().await;
     session.close().await.ok();
+    
+    if let Some(watcher) = idle_watcher {
+        watcher.abort();
+    }
+    
     trace_shutdown!("browser closed, exiting");
 
     // Both paths exit explicitly rather than returning. Returning hands control back to
