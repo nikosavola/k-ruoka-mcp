@@ -20,7 +20,7 @@ mod support;
 use serde_json::json;
 use support::{
     BANANA, Failure, LOOSE_MINCE, MockApi, MockLogin, PHANTOM, STORE, call_tool, connect,
-    connect_with_login, try_call_tool,
+    connect_with_login, connect_with_store_path, try_call_tool,
 };
 
 // ---------------------------------------------------------------------------
@@ -1115,5 +1115,74 @@ async fn set_default_store_requires_store_id() -> anyhow::Result<()> {
     call_tool(&client, "set_default_store", json!({}))
         .await
         .expect_err("store_id is required for set_default_store");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Default store persistence
+// ---------------------------------------------------------------------------
+
+/// set_default_store writes to the persistence file so a new server instance
+/// loading from the same path starts with the stored value.
+#[tokio::test]
+async fn set_default_store_persists_to_file() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!(
+        "k-ruoka-mcp-test-persist-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir)?;
+    let store_path = dir.join("default_store");
+
+    // First server: call set_default_store and verify the file is written.
+    let (client, _) = connect_with_store_path(MockApi::new(), store_path.clone()).await?;
+    call_tool(&client, "set_default_store", json!({"store_id": STORE}))
+        .await
+        .expect("set_default_store should succeed");
+    drop(client);
+
+    let written = std::fs::read_to_string(&store_path).expect("file should exist after set");
+    assert_eq!(written.trim(), STORE);
+
+    // Second server: loads from the same file, the default is already set.
+    let (client2, api2) = connect_with_store_path(MockApi::new(), store_path.clone()).await?;
+    let cart = call_tool(&client2, "get_cart", json!({}))
+        .await
+        .expect("get_cart should use the restored default store");
+    assert_eq!(cart["store"]["id"], STORE);
+    // One call was made (the get_cart), no set_default_store was needed.
+    assert_eq!(api2.calls().len(), 1);
+
+    std::fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+/// When no persistence file exists and no default has been set, omitting store_id
+/// still fails with the same error as without persistence.
+#[tokio::test]
+async fn missing_file_does_not_hide_the_no_default_error() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!(
+        "k-ruoka-mcp-test-no-file-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir)?;
+    let store_path = dir.join("default_store"); // file does not exist
+
+    let (client, api) = connect_with_store_path(MockApi::new(), store_path).await?;
+    let err = call_tool(&client, "get_cart", json!({}))
+        .await
+        .expect_err("should fail without a default store even with a path configured");
+    assert!(
+        err.contains("set_default_store"),
+        "should name the remedy: {err}"
+    );
+    assert!(api.calls().is_empty());
+
+    std::fs::remove_dir_all(&dir).ok();
     Ok(())
 }

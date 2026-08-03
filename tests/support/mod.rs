@@ -399,6 +399,26 @@ pub async fn connect(
     Ok((client, handle))
 }
 
+/// Like [`connect`], but with a persistence file for the default store at `store_path`.
+pub async fn connect_with_store_path(
+    api: MockApi,
+    store_path: std::path::PathBuf,
+) -> anyhow::Result<(rmcp::service::RunningService<rmcp::RoleClient, ()>, MockApi)> {
+    use rmcp::ServiceExt;
+
+    let (server_io, client_io) = tokio::io::duplex(1 << 16);
+    let handle = api.clone();
+    let server =
+        k_ruoka_mcp::mcp::CartServer::new(Arc::new(api)).with_default_store_path(store_path);
+    tokio::spawn(async move {
+        if let Ok(running) = server.serve(server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+    let client = ().serve(client_io).await?;
+    Ok((client, handle))
+}
+
 /// A scripted [`LoginFlow`], so the login tools can be tested without a browser.
 ///
 /// The real one spawns `k-ruoka-mcp login` and waits for a human, which no test can do.

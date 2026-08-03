@@ -378,7 +378,10 @@ its version format, and the way to provoke a Cloudflare block on purpose).
 `K_RUOKA_MIN_REQUEST_INTERVAL_MS` sets the minimum gap between `/kr-api/` requests
 (default 500; `0` disables the limit). `K_RUOKA_IDLE_TIMEOUT_SECS` closes an idle
 browser session cleanly after that many seconds (`0` or unset keeps the current
-always-on behavior).
+always-on behavior). `K_RUOKA_DEFAULT_STORE` seeds the default store id on first
+start, before any `set_default_store` call has written a value to the profile
+directory (useful for container or systemd deployments where the store is known at
+deploy time).
 
 `probe` is the tool for re-deriving the API contract when K-Ruoka changes their
 frontend. It goes through the same `Session` the

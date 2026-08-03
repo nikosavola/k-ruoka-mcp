@@ -10,7 +10,10 @@ use rmcp::{ServiceExt, transport::stdio};
 #[cfg(unix)]
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
-use crate::browser::{KrApi, LaunchMode, Session, session::default_profile_dir};
+use crate::browser::{
+    KrApi, LaunchMode, Session,
+    session::{default_profile_dir, default_store_path},
+};
 use crate::login_flow::ChildLogin;
 pub use tools::CartServer;
 
@@ -68,13 +71,16 @@ pub async fn serve() -> Result<()> {
     // fight over the profile lock. The browser is launched lazily on the first
     // tool call, so `serve` starts instantly and a client that only lists tools
     // never pays for it.
-    let session = Arc::new(Session::new(default_profile_dir()?, LaunchMode::Headless)?);
+    let profile_dir = default_profile_dir()?;
+    let store_path = default_store_path(&profile_dir);
+    let session = Arc::new(Session::new(profile_dir, LaunchMode::Headless)?);
 
     // The login tools drive the `login` subcommand as a child process, which needs the
     // session itself (to hand over the profile), not just the API seam.
     let login = Arc::new(ChildLogin::new(Arc::clone(&session)));
     let login_for_shutdown = Arc::clone(&login);
-    let handler = CartServer::with_login(Arc::clone(&session) as Arc<dyn KrApi>, login);
+    let handler = CartServer::with_login(Arc::clone(&session) as Arc<dyn KrApi>, login)
+        .with_default_store_path(store_path);
     let idle_watcher = idle_timeout().map(|timeout| {
         let session = Arc::clone(&session);
         tokio::spawn(async move {
@@ -128,11 +134,11 @@ pub async fn serve() -> Result<()> {
     trace_shutdown!("stopping any login, then closing the browser");
     login_for_shutdown.shutdown().await;
     session.close().await.ok();
-    
+
     if let Some(watcher) = idle_watcher {
         watcher.abort();
     }
-    
+
     trace_shutdown!("browser closed, exiting");
 
     // Both paths exit explicitly rather than returning. Returning hands control back to

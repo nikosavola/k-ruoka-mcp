@@ -1,5 +1,6 @@
 //! The cart tool surface.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -168,6 +169,40 @@ pub struct AuthStatus {
     pub detail: String,
 }
 
+/// Read a previously saved default store id from `path`.
+///
+/// Returns `None` if the file does not exist, is unreadable, or is empty --
+/// any of which means "no persisted value".
+fn read_default_store(path: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Write `store_id` to `path`, creating parent directories if needed.
+///
+/// Failures are logged to stderr but do not abort the tool call: the value is
+/// already live in memory, and a write failure (e.g. read-only filesystem)
+/// should not make `set_default_store` appear to fail to the model.
+async fn write_default_store(path: &std::path::Path, store_id: &str) {
+    if let Some(parent) = path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        eprintln!(
+            "k-ruoka-mcp: could not create directory {}: {e}",
+            parent.display()
+        );
+        return;
+    }
+    if let Err(e) = tokio::fs::write(path, store_id).await {
+        eprintln!(
+            "k-ruoka-mcp: could not save default store to {}: {e}",
+            path.display()
+        );
+    }
+}
+
 #[derive(Clone)]
 pub struct CartServer {
     api: Arc<dyn KrApi>,
@@ -179,6 +214,9 @@ pub struct CartServer {
     /// Shared across all clones so a `set_default_store` call persists for the life
     /// of the server, regardless of which clone handles the next tool call.
     default_store: Arc<Mutex<Option<String>>>,
+    /// Where to persist the default store between restarts. `None` in test/embedded
+    /// contexts that have no real profile directory.
+    store_path: Option<Arc<PathBuf>>,
     /// Read by the `#[tool_handler]`-generated `call_tool`/`list_tools`, which
     /// dead-code analysis does not see through.
     #[allow(dead_code)]
@@ -191,6 +229,7 @@ impl CartServer {
             api,
             login: None,
             default_store: Arc::new(Mutex::new(None)),
+            store_path: None,
             tool_router: Self::tool_router(),
         }
     }
@@ -200,7 +239,31 @@ impl CartServer {
             api,
             login: Some(login),
             default_store: Arc::new(Mutex::new(None)),
+            store_path: None,
             tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Attach a persistence file for the default store and load any previously saved value.
+    ///
+    /// `set_default_store` will write to this file so the value survives restarts. On
+    /// construction the file is read (if it exists) and used as the initial default.
+    /// `K_RUOKA_DEFAULT_STORE` is read as a fallback when no file exists yet.
+    pub fn with_default_store_path(self, path: PathBuf) -> Self {
+        // File takes precedence; env var is a bootstrap fallback for first-run.
+        let initial = read_default_store(&path)
+            .or_else(|| {
+                std::env::var("K_RUOKA_DEFAULT_STORE")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            })
+            .filter(|s| !s.is_empty());
+        if let Some(store) = initial {
+            *self.default_store.lock().unwrap() = Some(store);
+        }
+        Self {
+            store_path: Some(Arc::new(path)),
+            ..self
         }
     }
 
@@ -331,17 +394,20 @@ impl CartServer {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Set a default store for the session so other tools can omit \
-                       store_id. Once set, any tool that takes a store_id will use this \
-                       value when store_id is not explicitly provided. Use search_stores \
-                       to find a store_id. The default is scoped to this server process \
-                       and is not persisted across restarts."
+        description = "Set a default store so other tools can omit store_id. Once set, \
+                       any tool that takes a store_id will use this value when store_id \
+                       is not explicitly provided. The value is persisted to the profile \
+                       directory and restored on restart. Use search_stores to find a \
+                       store_id."
     )]
     async fn set_default_store(
         &self,
         Parameters(SetDefaultStoreArg { store_id }): Parameters<SetDefaultStoreArg>,
     ) -> Result<Json<DefaultStoreStatus>, ToolFailure> {
         *self.default_store.lock().unwrap() = Some(store_id.clone());
+        if let Some(path) = &self.store_path {
+            write_default_store(path, &store_id).await;
+        }
         Ok(Json(DefaultStoreStatus {
             default_store: store_id,
         }))

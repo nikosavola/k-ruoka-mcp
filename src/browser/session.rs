@@ -1326,6 +1326,18 @@ pub fn default_profile_dir() -> Result<PathBuf> {
     Ok(platform_data_dir()?.join("k-ruoka-mcp/profile"))
 }
 
+/// Where the persisted default store id is written, alongside the Chrome profile directory.
+///
+/// For the default layout this resolves to `<platform_data_dir>/k-ruoka-mcp/default_store`,
+/// a sibling of the `profile/` sub-directory. For a custom `K_RUOKA_PROFILE` it is a
+/// sibling of that directory.
+pub fn default_store_path(profile_dir: &Path) -> PathBuf {
+    profile_dir
+        .parent()
+        .unwrap_or(profile_dir)
+        .join("default_store")
+}
+
 #[cfg(target_os = "linux")]
 fn platform_data_dir() -> Result<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
