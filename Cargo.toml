@@ -2,9 +2,36 @@
 name = "k-ruoka-mcp"
 version = "0.1.3"
 edition = "2024"
+# The dependency floor, not a guess: the locked tree declares 1.88 (darling, rmcp), and
+# `cargo +1.88 check --all-targets --locked` passes. ci.yml holds it to that, otherwise the
+# number would rot the first time a dependency moved. Edition 2024 alone would only need
+# 1.85.
+rust-version = "1.88"
 description = "MCP server for managing a K-Ruoka shopping cart for one K-Plussa account"
+# Left at the README rather than defaulting to docs.rs. `src/lib.rs` is public only so the
+# integration tests can reach it; docs.rs would publish that as though it were an API to
+# program against, and there is nothing here to call from Rust.
+documentation = "https://github.com/nikosavola/k-ruoka-mcp#readme"
+# Explicit because three READMEs sit next to each other; only the English one ships.
+readme = "README.md"
 repository = "https://github.com/nikosavola/k-ruoka-mcp"
 license = "Apache-2.0"
+# crates.io caps this at five, so it is a subset of the eight in pyproject.toml.
+keywords = ["cart", "groceries", "k-ruoka", "kesko", "mcp"]
+# `api-bindings` is not a stretch despite this shipping as an executable -- the category is
+# documented as including HTTP API wrappers, and wrapping `/kr-api/` is what the crate does.
+categories = ["api-bindings", "command-line-utilities"]
+# `cargo install` installs every bin target, and `default-run` below does not change that,
+# so without this a user of the crate would get the `spike` and `probe` development tools
+# on their PATH under those generic names. Excluding the sources is also what makes the
+# published manifest declare one binary: cargo writes explicit `[[bin]]` tables when it
+# normalises, and `cargo binstall` abandons the release archive if a binary in that list is
+# missing, which would silently turn a download back into a source build.
+#
+# The rest is development weight that a crate consumer has no use for, trimmed for the same
+# reason `[tool.maturin] exclude` trims the sdist. pyproject.toml stays: maturin honours
+# this list when it builds the sdist, and without it that sdist has no build backend.
+exclude = ["/.github", "/docker", "/justfile", "/src/bin", "/tests/*.py"]
 # The wheel ships this binary and only this one. `spike` and `probe` are development
 # tools that reproduce measurements against the live site; they stay in the
 # repo and out of the distribution.

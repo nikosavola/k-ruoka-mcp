@@ -36,7 +36,7 @@ with no browser-automation sidecar.
   Not optional and not bundled: the whole design is "drive a real browser", because
   the cookies are the only credential the private API accepts.
 - `xvfb-run`, only for `login` on a machine with no display
-- Rust (built with 1.94), only to build from source
+- Rust 1.88 or newer, only to build from source (CI holds the crate to that floor)
 
 ## Install
 
@@ -51,6 +51,18 @@ PyPI is used purely as a distribution channel. There is no Python API and no Pyt
 the wheel. [maturin](https://github.com/PyO3/maturin)'s `bin` bindings put the
 compiled Rust executable straight into the environment's `bin/`, so there is no Python
 startup cost on the hot path.
+
+<details>
+<summary>Or cargo, from crates.io</summary>
+
+```sh
+cargo install k-ruoka-mcp
+```
+
+This compiles the crate, so it needs a Rust toolchain and a few minutes; the wheel above
+is a prebuilt binary and needs neither. Worth it if you already live in cargo.
+
+</details>
 
 <details>
 <summary>Building from source instead</summary>

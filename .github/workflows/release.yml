@@ -1,6 +1,6 @@
 # Release on a version bump: push to main, and if the version has changed to one that
-# was never tagged, cut the tag, build every wheel, publish to PyPI and open a GitHub
-# release. Nothing to remember at release time except bumping the version.
+# was never tagged, cut the tag, build every wheel, publish to PyPI and crates.io, and
+# open a GitHub release. Nothing to remember at release time except bumping the version.
 #
 # The trigger is the branch push, NOT the tag. The tag is created *by* this workflow, so
 # a `tags:` trigger would fire a second, duplicate run.
@@ -9,6 +9,10 @@
 # repository nikosavola/k-ruoka-mcp, workflow release.yml, environment pypi. The
 # publishing job therefore has to live in *this* file -- PyPI matches on the entrypoint
 # workflow's filename, so moving it into the reusable build workflow breaks the match.
+#
+# crates.io has the same mechanism and the same constraint: repository, workflow
+# release.yml, environment crates-io. Unlike PyPI it has no pending-publisher flow, so
+# the trusted publisher can only be registered after the crate's first, manual publish.
 #
 # Actions are pinned to commit SHAs with the tag in a comment: a tag is mutable, and
 # this workflow holds `id-token: write`.
@@ -59,6 +63,13 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Before the tag, because the tag is the point of no return: `cargo publish --locked`
+      # further down fails on a stale lock, and by then PyPI would already hold the
+      # version. Nothing else in this pipeline passes --locked, so a bump that edited
+      # Cargo.toml and not Cargo.lock -- v0.1.3 did exactly that -- gets no other warning.
+      - name: Check Cargo.lock is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
       - name: Check if tag exists and create if not
         id: check_tag
@@ -137,6 +148,38 @@ jobs:
       - run: ls -l dist
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  # Alongside PyPI rather than after it: the two registries are independent, and both are
+  # irreversible, so neither should wait on the other. Deliberately *not* a gate on the
+  # GitHub release either -- that release carries the downloadable artefacts, so gating it
+  # on crates.io would let one registry's bad day cost those as well. A failed publish
+  # here is a red run, which is the signal.
+  crates_io_publish:
+    name: Publish to crates.io
+    needs: [check_and_tag, build]
+    if: needs.check_and_tag.outputs.new_tag_created == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/k-ruoka-mcp
+    permissions:
+      # checkout authenticates with the GITHUB_TOKEN, which `permissions: {}` above grants
+      # nothing.
+      contents: read
+      # As with PyPI: the auth action trades this OIDC token for a short-lived registry
+      # token, so there is no secret to leak.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      # --locked so the published crate resolves to the dependency versions CI tested,
+      # and so a Cargo.lock left behind by a version bump fails here rather than shipping.
+      - env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
 
   github_release:
     name: Create GitHub Release

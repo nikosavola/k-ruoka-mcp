@@ -31,7 +31,7 @@ sisällä merkkijonoa `HeadlessChrome`. Ei stealth-lisäosia eikä haasteiden ra
 - **Google Chrome** polussa `/usr/bin/google-chrome` (ohita: `K_RUOKA_CHROME`). Ei
   valinnainen: evästeet ovat ainoa tunniste, jonka rajapinta hyväksyy.
 - `xvfb-run` vain `login`-komentoon näytöttömällä koneella.
-- Rust 1.94+ vain jos käännät itse.
+- Rust 1.88+ vain jos käännät itse.
 
 ## Asennus
 
@@ -45,6 +45,12 @@ uvx k-ruoka-mcp login    # kerran, käsin
 PyPI on tässä pelkkä jakelukanava. Paketissa ei ole Python-koodia:
 [maturin](https://github.com/PyO3/maturin)in `bin`-sidonta asettaa käännetyn ohjelman
 suoraan ympäristön `bin/`-hakemistoon.
+
+Cargon kanssa myös crates.iosta, jos Rust-työkalut ovat jo koneella:
+
+```bash
+cargo install k-ruoka-mcp
+```
 
 ## Käyttöönotto
 

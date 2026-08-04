@@ -41,6 +41,11 @@ jobs:
       # Keys on Cargo.lock, so this only rebuilds when the dependency tree actually changes.
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
+      # release.yml publishes with `cargo publish --locked` and checks this itself before
+      # tagging. Here it is for feedback on the pull request instead of at release time.
+      - name: Check Cargo.lock is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       # `just` so the coverage flags live in exactly one place. Duplicating them here is
       # how a local number and a CI number quietly stop matching.
       - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
@@ -88,6 +93,35 @@ jobs:
           # shared-key needs the OS too, or the three matrix jobs fight over one cache slot.
           shared-key: cross-platform-${{ matrix.os }}
       - run: cargo test --all-targets
+
+  # `rust-version` in Cargo.toml is a promise to anyone running `cargo install`, and cargo
+  # refuses the install on an older toolchain rather than trying. Nothing else here builds
+  # on anything but the runner's latest stable, so without this the number is unfalsifiable
+  # and drifts the first time a dependency raises its own floor.
+  msrv:
+    name: Build on the declared MSRV
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: msrv
+      # rustup rather than a toolchain action: the version is read out of Cargo.toml, so
+      # there is one source of truth and no third pin to keep in step with it.
+      - name: Build with the toolchain Cargo.toml declares
+        run: |
+          MSRV=$(grep -m 1 '^rust-version = ' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          if [ -z "$MSRV" ]; then
+            echo "::error::no rust-version in Cargo.toml"
+            exit 1
+          fi
+          echo "Declared MSRV: $MSRV"
+          rustup toolchain install "$MSRV" --profile minimal
+          cargo "+$MSRV" check --all-targets --locked
 
   # Runs the same hooks as local `prek install` (.pre-commit-config.yaml), so a PR from
   # someone without hooks installed still gets clippy, zizmor, etc. Skips cargo-test: the

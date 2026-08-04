@@ -41,6 +41,12 @@ uvx k-ruoka-mcp login    # en gång, för hand
 PyPI används enbart som distributionskanal. Paketet innehåller ingen Python-kod, bara den
 kompilerade Rust-binären.
 
+Med cargo går det också från crates.io, om Rust-verktygen redan finns på maskinen:
+
+```bash
+cargo install k-ruoka-mcp
+```
+
 ## Användning
 
 ### 1. Logga in en gång
