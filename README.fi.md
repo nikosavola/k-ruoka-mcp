@@ -52,6 +52,16 @@ Cargon kanssa myös crates.iosta, jos Rust-työkalut ovat jo koneella:
 cargo install k-ruoka-mcp
 ```
 
+Tai valmiina binäärinä ilman kääntämistä:
+
+```bash
+cargo binstall k-ruoka-mcp
+```
+
+Sama binääri löytyy myös käsin jokaisesta julkaisusta
+(`k-ruoka-mcp-<kohde>.tar.gz`, Windowsilla `.zip`), ja `SHA256SUMS` kattaa kaikki
+tiedostot.
+
 ## Käyttöönotto
 
 ### 1. Kirjaudu sisään kerran

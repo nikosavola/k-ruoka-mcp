@@ -169,6 +169,9 @@ ignore = [
   "T20",
   "TRY003",
 ]
+# Shorter than the others because this one spawns nothing: it only reads a wheel and
+# writes an archive.
+".github/workflows/repackage_wheel.py" = ["PLR2004", "TRY003"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true

@@ -47,6 +47,15 @@ Med cargo går det också från crates.io, om Rust-verktygen redan finns på mas
 cargo install k-ruoka-mcp
 ```
 
+Eller som en färdig binär, utan kompilering:
+
+```bash
+cargo binstall k-ruoka-mcp
+```
+
+Samma binär går också att hämta för hand från varje release
+(`k-ruoka-mcp-<mål>.tar.gz`, `.zip` på Windows); `SHA256SUMS` täcker alla filer.
+
 ## Användning
 
 ### 1. Logga in en gång

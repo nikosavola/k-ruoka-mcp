@@ -65,6 +65,28 @@ is a prebuilt binary and needs neither. Worth it if you already live in cargo.
 </details>
 
 <details>
+<summary>Or a prebuilt binary, without uvx</summary>
+
+```sh
+cargo binstall k-ruoka-mcp
+```
+
+No compile: [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) downloads the
+binary from the GitHub release. Or fetch it by hand -- every release carries
+`k-ruoka-mcp-<target-triple>.tar.gz` (`.zip` on Windows) with the executable at the
+archive root, plus a `SHA256SUMS` covering every asset:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+These are the same binaries the wheels ship, lifted straight out of them: glibc Linux
+(x86_64, aarch64), macOS (both) and Windows x86_64. A musl host has no archive and falls
+back to building.
+
+</details>
+
+<details>
 <summary>Building from source instead</summary>
 
 ```sh

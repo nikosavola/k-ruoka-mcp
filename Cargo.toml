@@ -37,6 +37,21 @@ exclude = ["/.github", "/docker", "/justfile", "/src/bin", "/tests/*.py"]
 # repo and out of the distribution.
 default-run = "k-ruoka-mcp"
 
+# Where `cargo binstall k-ruoka-mcp` looks: it resolves the crate through crates.io, then
+# fetches an archive off the GitHub release. Every key here overrides a default that
+# `.github/workflows/repackage_wheel.py` does not produce -- a version in the filename, and
+# a `<name>-<target>-v<version>/` directory inside the archive. The suffix is written out
+# rather than templated through `{ archive-suffix }` because `tgz` renders that as `.tgz`
+# first and `.tar.gz` only as a fallback.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.zip"
+pkg-fmt = "zip"
+
 [dependencies]
 anyhow = "1.0.104"
 async-trait = "0.1.91"

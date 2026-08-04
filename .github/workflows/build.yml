@@ -9,6 +9,10 @@
 # 22.04, Debian 12 and RHEL 9. maturin-action builds inside a manylinux2014 (glibc
 # 2.17) container, which is what makes the wheel installable on what people run.
 #
+# The standalone archives that `cargo binstall` fetches are repackaged out of those same
+# wheels rather than cross-compiled a second time: byte-identical to what PyPI ships, so
+# the smoke job's verdict carries to the archive on the three platforms it covers.
+#
 # Actions are pinned to commit SHAs, with the tag in a comment. A tag is mutable and a
 # release pipeline holding `id-token: write` is worth protecting from that.
 name: build
@@ -31,13 +35,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `triple` is the Rust target triple the wheel's binary was built for. maturin
+          # takes the short `target` names; the archives are named after the triple,
+          # because that is what cargo-binstall asks a release for.
           - name: linux-x86_64
             runner: ubuntu-latest
             target: x86_64
+            triple: x86_64-unknown-linux-gnu
             manylinux: "2014"
           - name: linux-aarch64
             runner: ubuntu-24.04-arm
             target: aarch64
+            triple: aarch64-unknown-linux-gnu
             manylinux: "2014"
           # `auto`, not omitted: the matrix feeds one `manylinux` input, and an empty
           # string would *override* maturin-action's own default rather than fall back
@@ -45,14 +54,17 @@ jobs:
           - name: macos-aarch64
             runner: macos-latest
             target: aarch64
+            triple: aarch64-apple-darwin
             manylinux: auto
           - name: macos-x86_64
             runner: macos-latest
             target: x86_64
+            triple: x86_64-apple-darwin
             manylinux: auto
           - name: windows-x86_64
             runner: windows-latest
             target: x64
+            triple: x86_64-pc-windows-msvc
             manylinux: auto
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,6 +82,21 @@ jobs:
         with:
           name: wheel-${{ matrix.name }}
           path: dist/*.whl
+          if-no-files-found: error
+
+      # Here rather than in a job of its own: this is where the triple is known without
+      # having to map a wheel's platform tag back to one. `python`, not `python3`: the
+      # latter is not on PATH on the Windows images.
+      - name: Repackage the binary for cargo binstall
+        shell: bash
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: python .github/workflows/repackage_wheel.py dist "$TRIPLE" archives
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: archive-${{ matrix.name }}
+          path: archives/*
           if-no-files-found: error
 
   # An sdist cannot install without a Rust toolchain, so it is a fallback for platforms
