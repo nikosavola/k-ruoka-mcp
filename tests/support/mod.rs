@@ -34,6 +34,14 @@ pub const BANANA: &str = "2000818700008";
 pub const LOOSE_MINCE: &str = "2000111100001";
 /// An EAN K-Ruoka has no record of.
 pub const PHANTOM: &str = "0000000000000";
+/// One of two alternative EANs behind a single personal offer.
+pub const OFFER_COFFEE_A: &str = "6420101887654";
+pub const OFFER_COFFEE_B: &str = "6420101887647";
+/// A store id `/kr-api/tos-offers` returns no offers for. Real K-Ruoka never gave the
+/// account zero offers at any store this was tried against; this exists to exercise
+/// that shape rather than pretend it never happens. Also the anonymous-session shape,
+/// measured against a fresh, never-logged-in profile: `200 {"offers": []}`.
+pub const NO_OFFERS_STORE: &str = "N000";
 
 /// One recorded request.
 #[derive(Debug, Clone)]
@@ -361,6 +369,56 @@ impl KrApi for MockApi {
                     {
                         "id": "K815", "name": "K-Market Ruoholahti", "location": "Helsinki",
                         "chainName": "K-Market", "isWebStore": false,
+                    },
+                ],
+            }));
+        }
+
+        // Two offers, each exercising a case the first alone would not: multiple
+        // alternative products (only one of which is available), and a missing
+        // `normalPricing` alongside a bundle `unit` ("3 kpl", not a per-item one).
+        if path == "/kr-api/tos-offers" {
+            let store_id = body.and_then(|b| b["storeId"].as_str()).unwrap_or_default();
+            if store_id == NO_OFFERS_STORE {
+                return Ok(json!({ "offers": [] }));
+            }
+            return Ok(json!({
+                "offers": [
+                    {
+                        "localizedTitle": {"finnish": "PIRKKA Kanan fileesuikaleet 400-450 g"},
+                        "normalPricing": {"price": 3.77},
+                        "pricing": {
+                            "price": 3.25, "discountPercentage": "-13 %",
+                            "unit": {"fi": "rs", "sv": "rs"},
+                        },
+                        "remainingQuantity": 2,
+                        "validUntil": "2026-08-09T20:59:59.999Z",
+                        "products": [
+                            {"product": {
+                                "ean": BANANA,
+                                "localizedName": {"finnish": "Pirkka banaani"},
+                                "isAvailable": true,
+                            }},
+                        ],
+                    },
+                    {
+                        "localizedTitle": {"finnish": "KULTA KATRIINA Jauhetut kahvit"},
+                        "pricing": {
+                            "price": 10.0, "discountPercentage": "-57-65 %",
+                            "unit": {"fi": "3 kpl", "sv": "3 st"},
+                        },
+                        "products": [
+                            {"product": {
+                                "ean": OFFER_COFFEE_A,
+                                "localizedName": {"finnish": "Kulta Katriina vaalea"},
+                                "isAvailable": true,
+                            }},
+                            {"product": {
+                                "ean": OFFER_COFFEE_B,
+                                "localizedName": {"finnish": "Kulta Katriina tumma"},
+                                "isAvailable": false,
+                            }},
+                        ],
                     },
                 ],
             }));

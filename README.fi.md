@@ -117,6 +117,7 @@ K-Citymarket Helsinki Ruoholahti. `search_stores` löytää tunnisteen.
 |---|---|
 | `search_products(store_id, query, limit?)` | Vain luku. Etsii EAN-koodit nimellä, ja juuri niitä `add_to_cart` tarvitsee. Hae suomeksi. |
 | `search_stores(query, limit?)` | Vain luku. Löytää `store_id`:n, jonka muut työkalut tarvitsevat. |
+| `get_personal_offers(store_id?)` | Vain luku. Tilin omat OmaPlussa-edut. Kaikki tähän mennessä havaitut edut olivat jo Plussa-kortilla -- vie saatavilla oleva listattu EAN `add_to_cart`iin lunastaaksesi edun. |
 | `get_cart(store_id)` | Vain luku. Ainoa lähde `itemId`-arvoille. |
 | `add_to_cart(store_id, ean, quantity?, unit?, ...)` | EAN-koodilla. `quantity` on lopullinen määrä, ei lisäys. |
 | `update_cart_item(store_id, item_id, quantity, unit?)` | Asettaa täsmällisen määrän. 0 poistaa. |

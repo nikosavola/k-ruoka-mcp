@@ -495,6 +495,156 @@ impl From<StoreSearchResponse> for StoreSearchView {
     }
 }
 
+// --- Personal offers ------------------------------------------------------------------
+
+/// `POST /kr-api/tos-offers` -- OmaPlussa-edut, the account's personalised offers.
+/// "tos" is K-Ruoka's own term, seen throughout the frontend (`tosOffers`,
+/// `isTargetingOffersAllowed`); not modelled here since nothing surfaces it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalOffersResponse {
+    #[serde(default)]
+    pub offers: Vec<PersonalOffer>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalOffer {
+    #[serde(default)]
+    pub localized_title: LocalizedName,
+    #[serde(default)]
+    pub pricing: Option<PersonalOfferPricing>,
+    #[serde(default)]
+    pub normal_pricing: Option<PersonalOfferNormalPricing>,
+    #[serde(default)]
+    pub products: Vec<PersonalOfferProduct>,
+    /// How many redemptions are left on the Plussa card. Distinct from `valid_until`:
+    /// an offer can still have time left but no redemptions, or the reverse.
+    #[serde(default)]
+    pub remaining_quantity: Option<u32>,
+    #[serde(default)]
+    pub valid_until: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalOfferPricing {
+    #[serde(default)]
+    pub price: Option<f64>,
+    #[serde(default)]
+    pub discount_percentage: Option<String>,
+    /// What `price` buys -- often more than one item. A live "-57-65 %" coffee offer
+    /// priced at 10.00 EUR turned out to mean 10.00 EUR for three (`unit.fi` was
+    /// "3 kpl"), not one; every offer observed carried this field.
+    #[serde(default)]
+    pub unit: Option<OfferUnit>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OfferUnit {
+    #[serde(default)]
+    pub fi: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalOfferNormalPricing {
+    #[serde(default)]
+    pub price: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PersonalOfferProduct {
+    pub product: OfferProduct,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferProduct {
+    #[serde(default)]
+    pub ean: String,
+    #[serde(default)]
+    pub localized_name: LocalizedName,
+    #[serde(default)]
+    pub is_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalOffersView {
+    /// The store the offers are scoped to. Measured against two real stores: the sets
+    /// differ (one was a strict superset of the other) rather than being identical
+    /// everywhere, so this is worth echoing back rather than assuming the caller
+    /// remembers which store a cached-looking result came from.
+    pub store_id: String,
+    pub offers: Vec<PersonalOfferView>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalOfferView {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<f64>,
+    /// What `price` buys, e.g. "3 kpl" for a buy-three bundle. Read this before
+    /// treating `price` as a per-item price -- it usually is not for a bundle offer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normal_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discount_percentage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_quantity: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<String>,
+    /// Any one of these that is available redeems the offer -- pass an available EAN
+    /// to `add_to_cart`. `is_available` still has to be checked here, same as
+    /// `search_products`: an offer can list a product this store does not stock.
+    /// Every offer observed so far was already loaded onto the account's Plussa card
+    /// with no separate activation call; not verified as a universal K-Ruoka guarantee.
+    pub products: Vec<PersonalOfferProductView>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalOfferProductView {
+    /// Pass this as `ean` to `add_to_cart`.
+    pub ean: String,
+    pub name: String,
+    /// `false` means the EAN is real but not buyable at this store right now.
+    pub is_available: bool,
+}
+
+impl From<PersonalOffer> for PersonalOfferView {
+    fn from(o: PersonalOffer) -> Self {
+        Self {
+            title: o.localized_title.best(),
+            price: o.pricing.as_ref().and_then(|p| p.price),
+            price_unit: o
+                .pricing
+                .as_ref()
+                .and_then(|p| p.unit.as_ref())
+                .and_then(|u| u.fi.clone()),
+            normal_price: o.normal_pricing.as_ref().and_then(|p| p.price),
+            discount_percentage: o.pricing.and_then(|p| p.discount_percentage),
+            remaining_quantity: o.remaining_quantity,
+            valid_until: o.valid_until,
+            products: o.products.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<PersonalOfferProduct> for PersonalOfferProductView {
+    fn from(p: PersonalOfferProduct) -> Self {
+        Self {
+            ean: p.product.ean,
+            name: p.product.localized_name.best(),
+            is_available: p.product.is_available,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

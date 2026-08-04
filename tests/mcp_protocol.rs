@@ -19,8 +19,9 @@ mod support;
 
 use serde_json::json;
 use support::{
-    BANANA, Failure, LOOSE_MINCE, MockApi, MockLogin, PHANTOM, STORE, call_tool, connect,
-    connect_with_login, connect_with_store_path, try_call_tool,
+    BANANA, Failure, LOOSE_MINCE, MockApi, MockLogin, NO_OFFERS_STORE, OFFER_COFFEE_A,
+    OFFER_COFFEE_B, PHANTOM, STORE, call_tool, connect, connect_with_login,
+    connect_with_store_path, try_call_tool,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,7 @@ async fn advertises_itself_and_its_tools() -> anyhow::Result<()> {
             "cancel_login",
             "clear_cart",
             "get_cart",
+            "get_personal_offers",
             "login_status",
             "remove_from_cart",
             "search_products",
@@ -271,6 +273,76 @@ async fn an_empty_search_query_is_refused_before_any_request() -> anyhow::Result
         assert!(err.contains("must not be empty"), "{tool}: {err}");
         assert!(api.calls().is_empty(), "{tool}: {:?}", api.calls());
     }
+    Ok(())
+}
+
+/// An offer with several equivalent products (a real one had fifteen) has to survive
+/// the view conversion as a full list, not just its first entry -- including one that
+/// is not available at this store, since only some of the fifteen usually are.
+#[tokio::test]
+async fn get_personal_offers_lists_offers_and_their_eans() -> anyhow::Result<()> {
+    let (client, api) = connect(MockApi::new()).await?;
+
+    let found = call_tool(&client, "get_personal_offers", json!({"store_id": STORE}))
+        .await
+        .unwrap_or_else(|e| panic!("get_personal_offers failed: {e}"));
+
+    assert_eq!(found["storeId"], STORE);
+    let offers = found["offers"].as_array().expect("offers array");
+    assert_eq!(offers.len(), 2, "{found}");
+
+    let first = &offers[0];
+    assert_eq!(first["title"], "PIRKKA Kanan fileesuikaleet 400-450 g");
+    assert_eq!(first["price"], 3.25);
+    // "rs" (rasia), a single-item unit -- the price is per item here.
+    assert_eq!(first["priceUnit"], "rs");
+    assert_eq!(first["normalPrice"], 3.77);
+    assert_eq!(first["discountPercentage"], "-13 %");
+    assert_eq!(first["remainingQuantity"], 2);
+    assert_eq!(first["validUntil"], "2026-08-09T20:59:59.999Z");
+    assert_eq!(first["products"][0]["ean"], BANANA);
+    assert_eq!(first["products"][0]["isAvailable"], true);
+
+    // No normalPricing in the fixture: absent, not null or zero. "3 kpl": the price is
+    // for three, and dropping this would make a bundle price read as a per-item one.
+    let second = &offers[1];
+    assert!(second.get("normalPrice").is_none(), "{second}");
+    assert_eq!(second["priceUnit"], "3 kpl");
+    let eans: Vec<&str> = second["products"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["ean"].as_str().unwrap())
+        .collect();
+    assert_eq!(eans, [OFFER_COFFEE_A, OFFER_COFFEE_B]);
+    assert_eq!(second["products"][1]["isAvailable"], false);
+
+    // Read-only: listing offers must not touch the cart, and must be exactly the one
+    // request this tool exists to make.
+    assert!(api.mutations().is_empty(), "{:?}", api.mutations());
+    let calls = api.calls();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].method, "POST");
+    assert_eq!(calls[0].path, "/kr-api/tos-offers");
+
+    // The store id has to actually reach the request, not just be accepted and ignored.
+    assert_eq!(calls[0].body.as_ref().unwrap()["storeId"], STORE);
+    Ok(())
+}
+
+/// A store with no personal offers, or an anonymous session -- measured live to be the
+/// same shape (`200 {"offers": []}`), not an error.
+#[tokio::test]
+async fn get_personal_offers_with_none_returns_an_empty_list() -> anyhow::Result<()> {
+    let (client, _) = connect(MockApi::new()).await?;
+    let found = call_tool(
+        &client,
+        "get_personal_offers",
+        json!({"store_id": NO_OFFERS_STORE}),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("get_personal_offers failed: {e}"));
+    assert_eq!(found["offers"], json!([]), "{found}");
     Ok(())
 }
 
@@ -1020,6 +1092,11 @@ async fn set_default_store_makes_store_id_optional_on_other_tools() -> anyhow::R
         .await
         .expect("get_cart should use the default store");
     assert_eq!(cart["store"]["id"], STORE);
+
+    let offers = call_tool(&client, "get_personal_offers", json!({}))
+        .await
+        .expect("get_personal_offers should use the default store");
+    assert_eq!(offers["storeId"], STORE);
 
     let cart = call_tool(&client, "add_to_cart", json!({"ean": BANANA}))
         .await

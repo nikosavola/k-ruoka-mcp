@@ -131,11 +131,13 @@ expected = sorted([
     "auth_status",
     "search_products",
     "search_stores",
+    "get_personal_offers",
+    "set_default_store",
     "start_login",
     "login_status",
     "cancel_login",
 ])
-check("all eleven tools are exposed", names == expected, f"got {names}")
+check(f"all {len(expected)} tools are exposed", names == expected, f"got {names}")
 
 print("\n2. get_cart is read-only and reports no account when anonymous")
 cart = s.tool("get_cart", store_id=STORE)

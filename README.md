@@ -234,6 +234,7 @@ later call; an explicit `store_id` still overrides the default.
 | `set_default_store(store_id)` | Sets the store used when later calls omit `store_id`. Scoped to this server process, not persisted across restarts. |
 | `search_products(store_id?, query, limit?)` | Read-only. Finds EANs by name, which is what `add_to_cart` needs. Search in Finnish. |
 | `search_stores(query, limit?)` | Read-only. Finds the `store_id` every other tool needs. |
+| `get_personal_offers(store_id?)` | Read-only. The account's personal OmaPlussa-edut offers. Every offer seen so far was already on the Plussa card -- pass an available listed EAN to `add_to_cart` to redeem it. |
 | `get_cart(store_id?)` | Read-only. The only source of `itemId` values. |
 | `add_to_cart(store_id?, ean, quantity?, unit?, local_store_id?, allow_substitutes?)` | By EAN. `quantity` is the resulting amount, not an increment. Defaults to 1, `unit` to `kpl`. |
 | `update_cart_item(store_id?, item_id, quantity, unit?)` | Sets an exact quantity. 0 removes. `unit` defaults to the item's existing one. |

@@ -14,9 +14,12 @@ use serde::Deserialize;
 use crate::browser::KrApi;
 use crate::browser::basket::Cart;
 use crate::browser::catalog::Catalog;
+use crate::browser::offers::Offers;
 use crate::browser::session::ApiError;
 use crate::login_flow::{LoginFlow, LoginProgress};
-use crate::types::{CartView, DEFAULT_UNIT, ProductSearchView, StoreSearchView};
+use crate::types::{
+    CartView, DEFAULT_UNIT, PersonalOffersView, ProductSearchView, StoreSearchView,
+};
 
 /// Used on argument structs where the caller must always supply a store id.
 const STORE_ID_DESC: &str = "K-Ruoka store id, e.g. \"N137\" for K-Citymarket Helsinki \
@@ -298,6 +301,10 @@ impl CartServer {
     fn catalog(&self) -> Catalog<'_> {
         Catalog::new(&*self.api)
     }
+
+    fn offers(&self) -> Offers<'_> {
+        Offers::new(&*self.api)
+    }
 }
 
 /// A tool failure the *model* is meant to read and act on.
@@ -437,6 +444,39 @@ impl CartServer {
             .await
             .map_err(to_tool_failure)?;
         Ok(Json(found.into()))
+    }
+
+    #[tool(
+        annotations(
+            title = "Personal offers",
+            read_only_hint = true,
+            idempotent_hint = true
+        ),
+        description = "The account's personalised OmaPlussa-edut offers at a store: what \
+                       is on personal offer right now. Read-only. Every offer seen so \
+                       far already sat on the account's Plussa card, so redeeming one \
+                       was just buying a listed product -- pass an EAN whose \
+                       isAvailable is true to add_to_cart, same check search_products \
+                       needs. Check priceUnit: a price is often for several items \
+                       (e.g. \"3 kpl\"), not one. Time-limited: call this fresh each \
+                       time rather than caching the result. An anonymous session \
+                       returns an empty list rather than an error -- check \
+                       auth_status if that is not what you expected."
+    )]
+    async fn get_personal_offers(
+        &self,
+        Parameters(arg): Parameters<StoreArg>,
+    ) -> Result<Json<PersonalOffersView>, ToolFailure> {
+        let store_id = self.resolve_store(arg.store_id)?;
+        let offers = self
+            .offers()
+            .personal_offers(&store_id)
+            .await
+            .map_err(to_tool_failure)?;
+        Ok(Json(PersonalOffersView {
+            store_id,
+            offers: offers.offers.into_iter().map(Into::into).collect(),
+        }))
     }
 
     #[tool(

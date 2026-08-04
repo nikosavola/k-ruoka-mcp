@@ -32,6 +32,7 @@ EXPECTED_TOOLS = sorted([
     "cancel_login",
     "clear_cart",
     "get_cart",
+    "get_personal_offers",
     "login_status",
     "remove_from_cart",
     "search_products",
