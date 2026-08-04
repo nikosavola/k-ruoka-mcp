@@ -1,4 +1,4 @@
-//! The `/kr-api/basket/...` calls, on top of [`Session`].
+//! The `/kr-api/basket/...` calls, on top of [`Session`](crate::browser::session::Session).
 
 use crate::browser::session::{ApiError, KrApi};
 use crate::types::{AmountInfo, Basket, BasketEvent, BasketItem, NewItem};

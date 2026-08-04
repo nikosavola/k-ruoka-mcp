@@ -315,7 +315,9 @@ impl CartServer {
 /// swallowed. Verified on the wire, not assumed -- see `tests/mcp_protocol.rs`.
 ///
 /// The mechanism: rmcp flips `isError` for any error type that converts to content;
-/// only [`ErrorData`] short-circuits into a protocol error. Hence a type of our own.
+/// only `ErrorData` (rmcp's own) short-circuits into a protocol error. Hence a type of
+/// our own. Not an intra-doc link: with `--no-deps`, the rmcp pages it would point at
+/// are never generated, so even a fully-qualified path would resolve to a dead link.
 pub struct ToolFailure(String);
 
 impl IntoContents for ToolFailure {
