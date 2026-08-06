@@ -1,4 +1,8 @@
-# k-ruoka-mcp
+<p align="center">
+  <img src="https://raw.githubusercontent.com/nikosavola/k-ruoka-mcp/main/.github/logo.svg" alt="k-ruoka-mcp" width="375">
+</p>
+
+---
 
 [![en](https://img.shields.io/badge/lang-en-red.svg)](./README.md)
 [![fi](https://img.shields.io/badge/lang-fi-blue.svg)](./README.fi.md)
