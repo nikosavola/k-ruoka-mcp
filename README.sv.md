@@ -7,6 +7,7 @@
 [![en](https://img.shields.io/badge/lang-en-red.svg)](./README.md)
 [![fi](https://img.shields.io/badge/lang-fi-blue.svg)](./README.fi.md)
 [![sv](https://img.shields.io/badge/lang-sv-yellow.svg)](./README.sv.md)
+[![codecov](https://codecov.io/gh/nikosavola/k-ruoka-mcp/graph/badge.svg)](https://codecov.io/gh/nikosavola/k-ruoka-mcp)
 
 En MCP-server som hanterar varukorgen för ett [K-Ruoka](https://www.k-ruoka.fi)-konto:
 läsa korgen, lägga till varor, ändra antal, ta bort varor och tömma korgen.

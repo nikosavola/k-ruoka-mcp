@@ -7,6 +7,7 @@
 [![en](https://img.shields.io/badge/lang-en-red.svg)](./README.md)
 [![fi](https://img.shields.io/badge/lang-fi-blue.svg)](./README.fi.md)
 [![sv](https://img.shields.io/badge/lang-sv-yellow.svg)](./README.sv.md)
+[![codecov](https://codecov.io/gh/nikosavola/k-ruoka-mcp/graph/badge.svg)](https://codecov.io/gh/nikosavola/k-ruoka-mcp)
 
 An MCP server that manages the shopping cart of one [K-Ruoka](https://www.k-ruoka.fi)
 (Finnish grocery) account: read the cart, add items, change quantities, remove items,
