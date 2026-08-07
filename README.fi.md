@@ -64,7 +64,7 @@ cargo binstall k-ruoka-mcp
 ```
 
 Sama binääri löytyy myös käsin jokaisesta julkaisusta
-(`k-ruoka-mcp-<kohde>.tar.gz`, Windowsilla `.zip`), ja `SHA256SUMS` kattaa kaikki
+(`k-ruoka-mcp-<kohde>.tar.gz`, Windowsissa `.zip`), ja `SHA256SUMS` kattaa kaikki
 tiedostot.
 
 ## Käyttöönotto
@@ -89,8 +89,8 @@ Kaksi asiaa on hyvä tietää:
 - **Auki on kaksi välilehteä.** Käytä sitä, jonka otsikko on *Tuotteet | K-Ruoka
   Verkkokauppa*. Toinen (`[k-ruoka-mcp] poller`) tarkkailee kirjautumista ja navigoi pois
   alta.
-- **Näytöttömällä koneella**, palvelimella tai Dockerissa, saat ikkunan sijaan `ssh`
-  -komennon ja `chrome://inspect`-osoitteen, joilla käytät selainta omalta koneeltasi.
+- **Näytöttömällä koneella**, palvelimella tai Dockerissa, saat ikkunan sijaan
+  `ssh`-komennon ja `chrome://inspect`-osoitteen, joilla käytät selainta omalta koneeltasi.
   Seuraa tulostettuja ohjeita; ne ovat täsmälliset.
 
 Kirjautuminen tallennetaan hakemistoon `~/.local/share/k-ruoka-mcp/profile` (ohita:
@@ -142,11 +142,11 @@ Kaksi asiaa kannattaa tietää:
   jättää koriin yhden. Mitattu, ei arvattu.
 
 Tavallinen kulku: `search_stores` kerran kaupan tunnisteen löytämiseksi, sitten
-`search_products` muuttamaan nimen EAN-koodiksi, ja lopuksi `add_to_cart`.
+`search_products` muuttamaan nimen EAN-koodiksi ja lopuksi `add_to_cart`.
 
 - **Hae suomeksi.** Valikoima on suomenkielinen, joten `maito` löytää paljon enemmän kuin
   `milk`. Tulokset ovat kauppakohtaisia: hinta ja saatavuus vaihtelevat kauppojen välillä.
-- **Tarkista hakutuloksen `isAvailable`.** Tuote voi olla valikoimassa mutta ei ostettavissa
+- **Tarkista hakutuloksen `isAvailable`.** Tuote voi olla valikoimassa, mutta ei ostettavissa
   kyseisestä kaupasta, ja `add_to_cart` hyväksyy EAN-koodin kumminkin päin.
 
 ### Kirjautuminen avustajan kautta
@@ -198,14 +198,14 @@ sinun oma korisi.**
 - Pyyntöjä rajoitetaan, ja määrä on selvästi tavallista selailua pienempi.
 - Mitään ei jaeta eteenpäin eikä myydä.
 
-**Lue voimassa olevat ehdot itse ja tee oma päätöksesi.** Ehdot voivat muuttua, ja se miten
-ne soveltuvat ihmisen ohjaamaan avustajaan omalla tilillä on tilin haltijan arvioitava.
+**Lue voimassa olevat ehdot itse ja tee oma päätöksesi.** Ehdot voivat muuttua, ja se, miten
+ne soveltuvat ihmisen ohjaamaan avustajaan omalla tilillä, on tilin haltijan arvioitava.
 Riski on oma K-Plussa-tilisi. Tämä ei ole oikeudellista neuvontaa.
 
 ## Tavaramerkit
 
 Ei liity Kesko Oyj:hin eikä ole sen hyväksymä. *K-Ruoka*, *K-Plussa*, *K-Citymarket*,
-*Pirkka* ja *Kesko* ovat Kesko Oyj:n tavaramerkkejä, ja niitä käytetään vain kuvaamaan
+*Pirkka* ja *Kesko* ovat Kesko Oyj:n tavaramerkkejä, ja niitä käytetään vain kuvaamaan,
 mihin ohjelmisto liittyy. K-Ruokan sisältöä ei jaeta eteenpäin.
 
 ## Kehittäminen
