@@ -189,17 +189,20 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Download every artefact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          # Unlike the PyPI job above, this one also wants the standalone archives:
-          # `cargo binstall` reads them off the release, not off a registry.
-          pattern: "{wheel-*,sdist,archive-*}"
-          path: dist
-          merge-multiple: true
+      # checkout writes the workspace root, download-artifact only dist/ -- disjoint, so
+      # the checksum step below is the first one that needs both.
+      - parallel:
+          - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+            with:
+              persist-credentials: false
+          - name: Download every artefact
+            uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+            with:
+              # Unlike the PyPI job above, this one also wants the standalone archives:
+              # `cargo binstall` reads them off the release, not off a registry.
+              pattern: "{wheel-*,sdist,archive-*}"
+              path: dist
+              merge-multiple: true
       - name: Checksum every artefact
         working-directory: dist
         # The glob is expanded before the redirection creates the file, so SHA256SUMS

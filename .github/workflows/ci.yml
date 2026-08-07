@@ -58,23 +58,28 @@ jobs:
       - name: Summary
         run: just coverage
 
-      - name: Upload code coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+      # Both uploads only read the coverage.xml the step above already wrote, and go to
+      # two unrelated services -- nothing here needs the other to finish first.
+      - parallel:
+          - name: Upload code coverage to Codecov
+            uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+            with:
+              token: ${{ secrets.CODECOV_TOKEN }}
+              # A Codecov hiccup is not a reason to fail a run whose tests and coverage
+              # both passed, same reasoning as the GitHub upload's fail-on-error below.
+              fail_ci_if_error: false
 
-      - name: Upload code coverage to GitHub
-        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1
-        with:
-          file: coverage.xml
-          language: Rust
-          label: code-coverage/cargo-llvm-cov
-          # The upload 404s until the repository has GitHub's code-coverage feature
-          # enabled, and a reporting side-channel being unavailable is not a reason to
-          # fail a run whose tests and coverage both passed. The `just coverage` step
-          # above still enforces the floor, so a real regression is caught either way.
-          fail-on-error: false
+          - name: Upload code coverage to GitHub
+            uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1
+            with:
+              file: coverage.xml
+              language: Rust
+              label: code-coverage/cargo-llvm-cov
+              # The upload 404s until the repository has GitHub's code-coverage feature
+              # enabled, and a reporting side-channel being unavailable is not a reason to
+              # fail a run whose tests and coverage both passed. The `just coverage` step
+              # above still enforces the floor, so a real regression is caught either way.
+              fail-on-error: false
 
   # Chrome discovery, the UA platform token, profile locations and signal handling all
   # branch per OS. This is the only thing that can actually catch a platform-specific

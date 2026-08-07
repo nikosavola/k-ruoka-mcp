@@ -1,0 +1,26 @@
+# actionlint v1.7.12 predates step-level parallelism (background steps and wait-all,
+# shipped 2026-06-25), so it rejects both new step keys. Scoped to the workflows that
+# use them so the rest keep full syntax checking.
+# Drop this once https://github.com/rhysd/actionlint/issues/693 ships.
+paths:
+  .github/workflows/ci.yml:
+    ignore:
+      - 'unexpected key "background" for step'
+      - 'step must run script with "run" section or run action with "uses" section'
+  .github/workflows/build.yml:
+    ignore:
+      - 'unexpected key "background" for step'
+      - 'step must run script with "run" section or run action with "uses" section'
+  .github/workflows/docker.yml:
+    ignore:
+      - 'unexpected key "background" for step'
+      - 'step must run script with "run" section or run action with "uses" section'
+      # actionlint's step-output type checker doesn't see step ids nested inside a
+      # `parallel:` block, so it thinks `meta` (docker/metadata-action's id, used by
+      # later steps in the build and merge jobs) doesn't exist. It genuinely does exist
+      # at runtime -- this ignores the false positive, not a real missing property.
+      - 'property "meta" is not defined in object type'
+  .github/workflows/release.yml:
+    ignore:
+      - 'unexpected key "background" for step'
+      - 'step must run script with "run" section or run action with "uses" section'

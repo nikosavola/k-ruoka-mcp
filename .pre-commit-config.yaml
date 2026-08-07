@@ -146,8 +146,14 @@ repos:
   # injection through `${{ }}` in a run block, credential persistence. The release
   # workflow holds `id-token: write` and can push tags, so this one earns its place --
   # it is the check that would have caught this session's `permissions: {}` mistake.
+  #
+  # v1.29.0, not the previous pin: anything older can't parse a `parallel:` step at
+  # all and silently skips auditing the whole file instead of erroring, which for
+  # release.yml would mean the id-token: write workflow stops being audited with no
+  # visible failure. 1.29.0 is the first release that understands the syntax (flagged
+  # experimental, but it does audit the file rather than skip it).
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.24.1
+    rev: v1.29.0
     hooks:
       - id: zizmor
         priority: check
