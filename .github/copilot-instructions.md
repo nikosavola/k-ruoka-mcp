@@ -17,10 +17,10 @@ for the full picture; this file is the subset relevant to reviewing a diff.
   guard while mutating the wrong cart.
 - **`itemId` used interchangeably with EAN would be a real bug**, not a style nit: they
   are different identifiers. `itemId` exists only once an item is in the cart;
-  `update_cart_item` / `remove_from_cart` take `itemId`, everything else takes an EAN.
+  `update_cart_item` / `remove_from_cart` take the cart's `item_id`; `add_to_cart` takes an EAN.
 - **The browser profile directory is never deleted on failure**, including in recovery
-  and retry paths. It holds a real login. Only an `AuthExpired` result should trigger
-  re-login; anything else should relaunch against the same profile.
+  and retry paths. It holds a real login. A block should relaunch against the same profile;
+  only an `AuthExpired` result should trigger re-login.
 - **The User-Agent never contains `HeadlessChrome`.** Do not suggest restoring a
   default/stealth user agent string; that substring alone is what triggers Cloudflare's
   block, per `K_RUOKA_USER_AGENT`'s doc comment.
@@ -31,7 +31,7 @@ for the full picture; this file is the subset relevant to reviewing a diff.
 
 - `KrApi` (`browser/session.rs`) is the seam between the server and K-Ruoka. New logic
   should be reachable through `MockApi` (`tests/support/mod.rs`) rather than requiring a
-  real browser — flag a PR that adds Chrome-dependent logic with no hermetic test path.
+  real browser; flag a PR that adds Chrome-dependent logic with no hermetic test path.
 - Recovery and readiness policy belongs in pure functions (`plan_recovery`,
   `should_replace`, `clearance_step`) precisely so it can be tested without Chrome. A PR
   that inlines new policy decisions into the Chrome-driving code instead of one of these
