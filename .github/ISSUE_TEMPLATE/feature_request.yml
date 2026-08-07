@@ -1,0 +1,35 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for k-ruoka-mcp
+type: "Feature"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please describe what you'd like to see.
+
+        Note: checkout is deliberately out of scope. Nothing in this server places an
+        order or spends money, and feature requests to add that will be declined.
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature description
+      description: What feature would you like to see and why?
+      placeholder: |
+        I would like... because...
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example usage (optional)
+      description: Show how you envision using this, e.g. as an MCP tool call
+      placeholder: |
+        A new tool `...` that takes ... and returns ...
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I have searched existing issues
+          required: true

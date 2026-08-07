@@ -1,0 +1,59 @@
+name: Bug Report
+description: Report a bug or issue with k-ruoka-mcp
+type: "Bug"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please provide the essential details to help fix it.
+
+        If this is a security vulnerability, please use
+        [Security Advisories](https://github.com/nikosavola/k-ruoka-mcp/security/advisories)
+        instead of a public issue.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected vs. what actually happened
+      placeholder: |
+        When I called the ... tool, I expected... but instead...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: The MCP tool call(s), `just` command, or `just probe` invocation that triggers it
+      placeholder: |
+        1. Called `add_to_cart` with ...
+        2. ...
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, k-ruoka-mcp version (or commit), Chrome version
+      placeholder: |
+        - OS: Ubuntu 24.04
+        - k-ruoka-mcp: 0.1.3
+        - Chrome: 128.0.6613.84
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Server output, with any cookies, tokens, or personal cart contents redacted
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I have searched existing issues
+          required: true
