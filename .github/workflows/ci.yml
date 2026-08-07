@@ -1,12 +1,8 @@
 # Tests, coverage and lint on every push and pull request.
 #
-# Only the hermetic suite runs here. The live suites need network, Chrome and -- for the
-# account one -- a real K-Plussa login, so they are `#[ignore]`d and stay a local thing.
-# That is also why coverage sits around 70% rather than higher: see the note in the
-# justfile.
-#
-# Lint also runs here: git hooks alone miss anyone who skipped `prek install`, including
-# the zizmor audit that guards the release pipeline's `id-token: write`.
+# Only the hermetic suite runs here -- the live suites need network, Chrome and a real
+# login, so they stay `#[ignore]`d and local. Lint runs here too, for anyone who skipped
+# `prek install` locally.
 name: ci
 
 on:
@@ -22,10 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Coverage needs cargo-llvm-cov, which is easiest to keep on one OS. Cross-platform
-  # correctness (the `cross-platform` job below) does not need it: the hermetic suite
-  # launches no browser, so it is a fair test of the portability code paths without
-  # needing Chrome or a coverage toolchain on every runner.
+  # Coverage needs cargo-llvm-cov, easiest to keep on one OS; cross-platform below covers
+  # the rest without it.
   coverage:
     name: Test and coverage
     runs-on: ubuntu-latest
@@ -41,16 +35,14 @@ jobs:
       # Keys on Cargo.lock, so this only rebuilds when the dependency tree actually changes.
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
-      # release.yml publishes with `cargo publish --locked` and checks this itself before
-      # tagging. Here it is for feedback on the pull request instead of at release time.
+      # For feedback on the PR; release.yml checks this again before tagging.
       - name: Check Cargo.lock is up to date
         run: cargo metadata --locked --format-version 1 > /dev/null
 
-      # `just` so the coverage flags live in exactly one place. Duplicating them here is
-      # how a local number and a CI number quietly stop matching.
+      # `just` so the coverage flags live in one place, not duplicated here.
       - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
         with:
-          tool: cargo-llvm-cov,just
+          tool: cargo-llvm-cov,cargo-nextest,just
 
       - name: Test with coverage
         run: just coverage-xml
@@ -58,15 +50,14 @@ jobs:
       - name: Summary
         run: just coverage
 
-      # Both uploads only read the coverage.xml the step above already wrote, and go to
-      # two unrelated services -- nothing here needs the other to finish first.
+      # These only read files the two steps above already wrote, to unrelated services --
+      # none needs another to finish first. A reporting hiccup shouldn't fail a run whose
+      # tests and coverage passed, hence fail_ci_if_error/fail-on-error: false throughout.
       - parallel:
           - name: Upload code coverage to Codecov
             uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
             with:
               token: ${{ secrets.CODECOV_TOKEN }}
-              # A Codecov hiccup is not a reason to fail a run whose tests and coverage
-              # both passed, same reasoning as the GitHub upload's fail-on-error below.
               fail_ci_if_error: false
 
           - name: Upload code coverage to GitHub
@@ -75,17 +66,24 @@ jobs:
               file: coverage.xml
               language: Rust
               label: code-coverage/cargo-llvm-cov
-              # The upload 404s until the repository has GitHub's code-coverage feature
-              # enabled, and a reporting side-channel being unavailable is not a reason to
-              # fail a run whose tests and coverage both passed. The `just coverage` step
-              # above still enforces the floor, so a real regression is caught either way.
+              # 404s until GitHub's code-coverage feature is enabled on the repo.
               fail-on-error: false
 
-  # Chrome discovery, the UA platform token, profile locations and signal handling all
-  # branch per OS. This is the only thing that can actually catch a platform-specific
-  # regression short of running the live suite by hand on each OS, since none of those
-  # branches launch a browser -- `cfg!(target_os = ...)` picks the value at compile time,
-  # so a Windows or macOS build failure or a wrong constant shows up here.
+          # Reads the JUnit report the nextest "ci" profile (nextest.toml) wrote, for
+          # Codecov's flaky-test and failure-rate analytics. Runs even if tests failed --
+          # that's the case this exists for -- unlike the two uploads above, which have
+          # nothing to read then and skip normally.
+          - name: Upload test results to Codecov
+            if: ${{ !cancelled() }}
+            uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1.2.1
+            with:
+              token: ${{ secrets.CODECOV_TOKEN }}
+              file: target/nextest/ci/junit.xml
+              fail_ci_if_error: false
+
+  # Chrome discovery, the UA token, profile paths and signal handling all branch per OS
+  # via `cfg!(target_os = ...)`; this is what catches a platform-specific regression
+  # without running the live suite by hand on each OS.
   cross-platform:
     name: Test (${{ matrix.os }})
     strategy:
@@ -105,10 +103,8 @@ jobs:
           shared-key: cross-platform-${{ matrix.os }}
       - run: cargo test --all-targets
 
-  # `rust-version` in Cargo.toml is a promise to anyone running `cargo install`, and cargo
-  # refuses the install on an older toolchain rather than trying. Nothing else here builds
-  # on anything but the runner's latest stable, so without this the number is unfalsifiable
-  # and drifts the first time a dependency raises its own floor.
+  # `rust-version` in Cargo.toml is a promise to `cargo install` users; nothing else here
+  # builds on anything but the runner's latest stable, so without this the number drifts.
   msrv:
     name: Build on the declared MSRV
     runs-on: ubuntu-latest
@@ -134,10 +130,8 @@ jobs:
           rustup toolchain install "$MSRV" --profile minimal
           cargo "+$MSRV" check --all-targets --locked
 
-  # Runs the same hooks as local `prek install` (.pre-commit-config.yaml), so a PR from
-  # someone without hooks installed still gets clippy, zizmor, etc. Skips cargo-test: the
-  # coverage and cross-platform jobs above already run it. rustfmt/clippy ship with the
-  # runner's rustup toolchain; `just` (for the just-fmt hook) doesn't, so it's installed here.
+  # Same hooks as local `prek install`, for PRs from anyone who skipped it. Skips
+  # cargo-test since coverage/cross-platform already run it.
   lint:
     name: Lint (pre-commit hooks)
     runs-on: ubuntu-latest
@@ -153,18 +147,15 @@ jobs:
         with:
           tool: just
 
-      # No token in this step's environment on purpose. It runs cargo-clippy, which
-      # compiles the pull request's code and so executes its build scripts and proc macros.
-      # The action passes --show-diff-on-failure itself, which matters because the
-      # formatters rewrite in place on a runner that is then thrown away.
+      # No token here on purpose: this compiles the PR's code, running its build scripts
+      # and proc macros.
       - name: Run pre-commit hooks
         uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
         with:
           prek-version: "0.4.11"
           extra-args: --all-files --skip cargo-test --skip zizmor
 
-      # Separate, so the token reaches zizmor and nothing else. With it the online audits
-      # resolve actions against the GitHub API instead of quietly degrading to offline.
+      # Separate step, so the token reaches only zizmor and lets it query the GitHub API.
       - name: Audit the workflows
         uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
         env:

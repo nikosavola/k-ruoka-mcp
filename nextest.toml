@@ -1,0 +1,4 @@
+# Only the "ci" profile writes JUnit, so a plain local `cargo nextest run` (default
+# profile) doesn't leave target/nextest/default/junit.xml behind on every run.
+[profile.ci.junit]
+path = "junit.xml"

@@ -111,11 +111,14 @@ coverage:
     cargo llvm-cov --all-targets --ignore-filename-regex '{{ cov_exclude }}' \
       --fail-under-lines {{ cov_min }} --summary-only
 
-# Cobertura XML, which is what CI uploads
+# Cobertura XML, which is what CI uploads. Runs over nextest instead of `cargo test` so
+# the "ci" profile in nextest.toml also writes a JUnit report (for Codecov Test
+# Analytics) alongside it, at target/nextest/ci/junit.xml. Needs cargo-nextest installed.
 [group('coverage')]
 coverage-xml:
-    cargo llvm-cov --all-targets --ignore-filename-regex '{{ cov_exclude }}' \
-      --fail-under-lines {{ cov_min }} --cobertura --output-path coverage.xml
+    cargo llvm-cov nextest --all-targets --ignore-filename-regex '{{ cov_exclude }}' \
+      --config-file nextest.toml --profile ci --fail-under-lines {{ cov_min }} \
+      --cobertura --output-path coverage.xml
 
 # Browsable HTML report, then print where it landed
 [group('coverage')]
