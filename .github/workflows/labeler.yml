@@ -1,0 +1,24 @@
+# Labels pull requests by which paths they touch, per .github/labeler.yml.
+#
+# pull_request_target (not pull_request) so a PR from a fork still gets labeled: it runs
+# with the base repo's token rather than the fork's, since actions/labeler only reads the
+# diff through the API and never checks out or executes the PR's code -- no checkout, no
+# PR content reaches a run: block, which is what the ignore below is vouching for.
+name: labeler
+
+on:
+  # zizmor: ignore[dangerous-triggers] read-only via the API, see the header comment
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  label:
+    name: Label PR by changed paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0

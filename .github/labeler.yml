@@ -1,0 +1,61 @@
+# Configuration for GitHub Actions PR Labeler
+# https://github.com/actions/labeler
+browser:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: 'src/browser/**/*'
+          - any-glob-to-any-file: 'src/login.rs'
+          - any-glob-to-any-file: 'src/login_flow.rs'
+ci:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: '.github/workflows/**/*'
+dependencies:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: 'Cargo.toml'
+          - any-glob-to-any-file: 'Cargo.lock'
+          - any-glob-to-any-file: 'pyproject.toml'
+docker:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: 'docker/**/*'
+          - any-glob-to-any-file: '.github/workflows/docker.yml'
+          - any-glob-to-any-file: '.github/workflows/docker_smoke_test.py'
+          - any-glob-to-any-file: '.github/workflows/ghcr-cleanup.yml'
+documentation:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: '*.md'
+          - any-glob-to-any-file: '.github/workflows/docs.yml'
+github-config:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: '.github/copilot-instructions.md'
+          - any-glob-to-any-file: '.github/ISSUE_TEMPLATE/**/*'
+          - any-glob-to-any-file: '.github/labeler.yml'
+mcp:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: 'src/mcp/**/*'
+python:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: '**/*.py'
+          - any-glob-to-any-file: 'pyproject.toml'
+release:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: '.github/workflows/release.yml'
+          - any-glob-to-any-file: '.github/workflows/build.yml'
+          - any-glob-to-any-file: '.github/workflows/repackage_wheel.py'
+tests:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: 'tests/**/*'
+          - any-glob-to-any-file: '.github/workflows/smoke_test.py'
+tooling:
+  - any:
+      - changed-files:
+          - any-glob-to-any-file: 'justfile'
+          - any-glob-to-any-file: '.pre-commit-config.yaml'
