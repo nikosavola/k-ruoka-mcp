@@ -1,6 +1,5 @@
 name: Feature Request
 description: Suggest a new feature or enhancement for k-ruoka-mcp
-type: "Feature"
 labels: ["enhancement"]
 body:
   - type: markdown

@@ -1,6 +1,5 @@
 name: Bug Report
 description: Report a bug or issue with k-ruoka-mcp
-type: "Bug"
 labels: ["bug"]
 body:
   - type: markdown

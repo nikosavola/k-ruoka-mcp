@@ -1,6 +1,6 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 📚 Documentation
+  - name: Documentation
     url: https://nikosavola.github.io/k-ruoka-mcp/k_ruoka_mcp/
     about: Rustdoc for the library, generated from main
   - name: 📖 README
