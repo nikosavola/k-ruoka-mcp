@@ -37,9 +37,11 @@ debug_port_from_args() {
     for arg in "$@"; do
         case "$prev" in
         --port) port="$arg" ;;
+        *) ;;
         esac
         case "$arg" in
         --port=*) port="${arg#--port=}" ;;
+        *) ;;
         esac
         prev="$arg"
     done

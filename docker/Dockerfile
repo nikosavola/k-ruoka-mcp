@@ -11,12 +11,12 @@ COPY Cargo.toml Cargo.lock ./
 # Keyed only on Cargo.toml/Cargo.lock so this layer survives every source-only commit.
 # cargo builds every dependency for the target bin regardless of what a dummy main.rs calls.
 RUN mkdir src && echo 'fn main() {}' > src/main.rs \
-    && cargo build --release --bin k-ruoka-mcp \
+    && cargo build --release --locked --bin k-ruoka-mcp \
     && rm -rf src
 COPY src ./src
 # touch forces a fingerprint change even if COPY lands in the same on-disk second as the
 # dummy main.rs above.
-RUN touch src/main.rs && cargo build --release --bin k-ruoka-mcp
+RUN touch src/main.rs && cargo build --release --locked --bin k-ruoka-mcp
 
 # Runtime: Alpine plus the one thing this server actually needs, a real Chromium to
 # drive over CDP. There is no public K-Ruoka API, so this cannot be made lighter.
@@ -32,7 +32,7 @@ FROM alpine:3.22
 # Versions deliberately unpinned: Alpine's repo only keeps recent package builds, so a
 # pinned version here goes stale and breaks the build rather than making it reproducible.
 # hadolint ignore=DL3018
-RUN apk add --no-cache chromium tini ca-certificates xvfb xvfb-run socat \
+RUN apk add --no-cache ca-certificates chromium socat tini xvfb xvfb-run \
     && adduser -D -u 1000 -h /home/k-ruoka k-ruoka \
     # Pre-created and owned by the runtime user so that mounting a volume here (for a
     # persistent login) inherits this ownership on first use rather than the root
