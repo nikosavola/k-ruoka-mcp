@@ -130,6 +130,25 @@ jobs:
           rustup toolchain install "$MSRV" --profile minimal
           cargo "+$MSRV" check --all-targets --locked
 
+  sonarqube:
+    name: SonarQube
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # shallow clones reduce the relevancy of blame-based analysis
+          persist-credentials: false
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=nikosavola_k-ruoka-mcp
+            -Dsonar.organization=nikosavola
+
   # Same hooks as local `prek install`, for PRs from anyone who skipped it. Skips
   # cargo-test since coverage/cross-platform already run it.
   lint:
