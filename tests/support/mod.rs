@@ -227,6 +227,49 @@ fn basket_json(state: &State) -> Value {
     })
 }
 
+/// `ADD-ITEM`: replaces the amount for an EAN already present rather than
+/// accumulating, caps at 999 (both observed against the live site), and a
+/// non-positive amount adds nothing.
+fn apply_add_item(state: &mut State, event: &Value) {
+    let item = &event["item"];
+    let ean = item["ean"].as_str().unwrap_or_default().to_string();
+    let amount = item["amountInfo"]["amount"].as_f64().unwrap_or(0.0);
+    let unit = item["amountInfo"]["unit"]
+        .as_str()
+        .unwrap_or("kpl")
+        .to_string();
+    if amount <= 0.0 {
+        return;
+    }
+    let amount = amount.min(999.0);
+    match state.items.iter_mut().find(|(_, e, _, _)| *e == ean) {
+        Some(existing) => {
+            existing.2 = amount;
+            existing.3 = unit;
+        }
+        // The item id happens to equal the EAN for ordinary products.
+        None => state.items.push((ean.clone(), ean, amount, unit)),
+    }
+}
+
+/// `SET-ITEM-AMOUNT`: an unknown item id is a silent no-op, and 0 or negative
+/// removes. Both are faithfully unhelpful here on purpose, matching what was
+/// observed against the live site.
+fn apply_set_item_amount(state: &mut State, event: &Value) {
+    let id = event["itemId"].as_str().unwrap_or_default();
+    let amount = event["value"]["amount"].as_f64().unwrap_or(0.0);
+    let unit = event["value"]["unit"].as_str().unwrap_or("kpl").to_string();
+    let Some(pos) = state.items.iter().position(|(i, _, _, _)| i == id) else {
+        return;
+    };
+    if amount <= 0.0 {
+        state.items.remove(pos);
+    } else {
+        state.items[pos].2 = amount;
+        state.items[pos].3 = unit;
+    }
+}
+
 fn apply_events(state: &mut State, events: &Value) {
     for event in events.as_array().into_iter().flatten() {
         let event_type = event["type"].as_str().unwrap_or_default();
@@ -234,45 +277,8 @@ fn apply_events(state: &mut State, events: &Value) {
             continue;
         }
         match event_type {
-            "ADD-ITEM" => {
-                let item = &event["item"];
-                let ean = item["ean"].as_str().unwrap_or_default().to_string();
-                let amount = item["amountInfo"]["amount"].as_f64().unwrap_or(0.0);
-                let unit = item["amountInfo"]["unit"]
-                    .as_str()
-                    .unwrap_or("kpl")
-                    .to_string();
-                // Observed: a non-positive amount adds nothing, and re-adding an EAN
-                // already present replaces the amount rather than accumulating.
-                if amount <= 0.0 {
-                    continue;
-                }
-                // Also observed: K-Ruoka caps the amount at 999.
-                let amount = amount.min(999.0);
-                match state.items.iter_mut().find(|(_, e, _, _)| *e == ean) {
-                    Some(existing) => {
-                        existing.2 = amount;
-                        existing.3 = unit;
-                    }
-                    // The item id happens to equal the EAN for ordinary products.
-                    None => state.items.push((ean.clone(), ean, amount, unit)),
-                }
-            }
-            "SET-ITEM-AMOUNT" => {
-                let id = event["itemId"].as_str().unwrap_or_default();
-                let amount = event["value"]["amount"].as_f64().unwrap_or(0.0);
-                let unit = event["value"]["unit"].as_str().unwrap_or("kpl").to_string();
-                // Observed: an unknown item id is a silent no-op, and 0 or negative
-                // removes. Both are faithfully unhelpful here on purpose.
-                if let Some(pos) = state.items.iter().position(|(i, _, _, _)| i == id) {
-                    if amount <= 0.0 {
-                        state.items.remove(pos);
-                    } else {
-                        state.items[pos].2 = amount;
-                        state.items[pos].3 = unit;
-                    }
-                }
-            }
+            "ADD-ITEM" => apply_add_item(state, event),
+            "SET-ITEM-AMOUNT" => apply_set_item_amount(state, event),
             "REMOVE-ITEM" => {
                 let id = event["itemId"].as_str().unwrap_or_default();
                 state.items.retain(|(i, _, _, _)| i != id);

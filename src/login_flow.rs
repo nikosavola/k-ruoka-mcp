@@ -229,24 +229,9 @@ impl LoginFlow for ChildLogin {
 
         // Wait for the instructions rather than returning immediately, so the caller
         // gets something to show the user in the same turn.
-        let deadline = tokio::time::Instant::now() + INSTRUCTIONS_TIMEOUT;
-        loop {
-            if output.lock().await.contains(READY_MARKER) {
-                break;
-            }
-            if child.try_wait().map_err(wrap)?.is_some() {
-                // Died before printing anything useful, e.g. no display and no xvfb-run.
-                let detail = output.lock().await.clone();
-                self.session.resume_after_login().await;
-                return Err(ApiError::Other(anyhow::anyhow!(
-                    "login exited before it was ready:\n{}",
-                    detail.trim()
-                )));
-            }
-            if tokio::time::Instant::now() >= deadline {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        if let Err(e) = wait_for_ready(&mut child, &output).await {
+            self.session.resume_after_login().await;
+            return Err(e);
         }
 
         let instructions = output.lock().await.clone();
@@ -367,6 +352,29 @@ async fn terminate_group(child: &mut Child) {
     }
     let _ = child.start_kill();
     let _ = child.wait().await;
+}
+
+/// Block until `login` prints [`READY_MARKER`] or [`INSTRUCTIONS_TIMEOUT`] elapses.
+/// Errors if the child dies first (e.g. no display and no xvfb-run), or if watching it
+/// via `try_wait` itself fails with an I/O error.
+async fn wait_for_ready(child: &mut Child, output: &Arc<Mutex<String>>) -> Result<(), ApiError> {
+    let deadline = tokio::time::Instant::now() + INSTRUCTIONS_TIMEOUT;
+    loop {
+        if output.lock().await.contains(READY_MARKER) {
+            return Ok(());
+        }
+        if child.try_wait().map_err(wrap)?.is_some() {
+            let detail = output.lock().await.clone();
+            return Err(ApiError::Other(anyhow::anyhow!(
+                "login exited before it was ready:\n{}",
+                detail.trim()
+            )));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }
 
 fn wrap(e: std::io::Error) -> ApiError {
