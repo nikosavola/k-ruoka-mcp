@@ -8,6 +8,7 @@
 [![fi](https://img.shields.io/badge/lang-fi-blue.svg)](./README.fi.md)
 [![sv](https://img.shields.io/badge/lang-sv-yellow.svg)](./README.sv.md)
 [![codecov](https://codecov.io/gh/nikosavola/k-ruoka-mcp/graph/badge.svg)](https://codecov.io/gh/nikosavola/k-ruoka-mcp)
+[![Quality gate status](https://sonarcloud.io/api/project_badges/measure?project=nikosavola_k-ruoka-mcp&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=nikosavola_k-ruoka-mcp)
 
 MCP-palvelin, joka hallinnoi yhden [K-Ruoka](https://www.k-ruoka.fi)-tilin ostoskoria:
 lukee korin, lisää tuotteita, muuttaa määriä, poistaa tuotteita ja tyhjentää korin.
