@@ -60,6 +60,8 @@ Read by the server: `K_RUOKA_CHROME` (binary path), `K_RUOKA_PROFILE`,
 `K_RUOKA_MIN_REQUEST_INTERVAL_MS`, `K_RUOKA_IDLE_TIMEOUT_SECS`,
 `K_RUOKA_DEFAULT_STORE` (seeds the default store on first start, before any
 `set_default_store` call has written a persisted value),
+`K_RUOKA_HTTP_HOST`, `K_RUOKA_HTTP_PORT`, `K_RUOKA_ALLOWED_HOSTS`,
+`K_RUOKA_ALLOWED_ORIGINS` (opt-in Streamable HTTP configuration),
 `K_RUOKA_TRACE_SHUTDOWN` (stderr breadcrumbs for startup and shutdown hangs). Read by the tests: `K_RUOKA_ACCOUNT_TEST`,
 `K_RUOKA_TEST_STORE`. Docker adds `K_RUOKA_DEBUG_PORT`.
 

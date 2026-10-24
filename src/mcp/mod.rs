@@ -1,7 +1,9 @@
-//! MCP protocol wiring: tool registration and the stdio transport.
+//! MCP protocol wiring: tool registration, stdio and Streamable HTTP.
 
+pub mod http;
 pub mod tools;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,6 +11,7 @@ use anyhow::Result;
 use rmcp::{ServiceExt, transport::stdio};
 #[cfg(unix)]
 use tokio::signal::unix::{Signal, SignalKind, signal};
+use tokio_util::sync::CancellationToken;
 
 use crate::browser::{
     KrApi, LaunchMode, Session,
@@ -58,6 +61,14 @@ fn idle_check_interval(timeout: Duration) -> Duration {
 }
 
 pub async fn serve() -> Result<()> {
+    serve_transport(None).await
+}
+
+pub async fn serve_http(address: SocketAddr, config: http::HttpConfig) -> Result<()> {
+    serve_transport(Some((address, config))).await
+}
+
+async fn serve_transport(http: Option<(SocketAddr, http::HttpConfig)>) -> Result<()> {
     // Before anything else, including startup. Tokio installs the OS handler inside
     // `signal()` rather than on the first poll, so registering here is what shrinks the
     // window in which a SIGTERM is fatal down to almost nothing. Startup is cheap now
@@ -99,7 +110,18 @@ pub async fn serve() -> Result<()> {
     });
     trace_shutdown!("session built, starting the handshake");
 
+    let is_http = http.is_some();
+    let cancellation = CancellationToken::new();
     let serving = async {
+        if let Some((address, config)) = http {
+            let listener = tokio::net::TcpListener::bind(address).await?;
+            let router = http::router(handler, config, cancellation.child_token());
+            eprintln!("k-ruoka-mcp: HTTP listening on {}", listener.local_addr()?);
+            axum::serve(listener, router)
+                .with_graceful_shutdown(cancellation.clone().cancelled_owned())
+                .await?;
+            return anyhow::Ok(());
+        }
         // The handshake is inside the select on purpose: a signal arriving while the
         // server is still waiting for `initialize` must be handled too, and it was
         // not when only `waiting()` was covered.
@@ -108,18 +130,28 @@ pub async fn serve() -> Result<()> {
         service.waiting().await?;
         anyhow::Ok(())
     };
+    tokio::pin!(serving);
 
     // MCP clients shut a stdio server down by signalling it, so SIGTERM is the
     // *normal* exit path here, not an edge case -- and taking it by default would
     // skip the close below, losing the cookie flush that `login` exists to produce.
     let outcome = tokio::select! {
-        result = serving => {
+        result = &mut serving => {
             trace_shutdown!("the service loop ended on its own");
             result
         }
         signal = terminate.recv() => {
             eprintln!("k-ruoka-mcp: {signal}, shutting the browser down cleanly");
-            Ok(())
+            session.signal_shutdown();
+            cancellation.cancel();
+            if is_http {
+                // Stop accepting connections and bound draining before flushing the profile.
+                tokio::time::timeout(Duration::from_secs(10), &mut serving)
+                    .await
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("HTTP shutdown timed out")))
+            } else {
+                Ok(())
+            }
         }
     };
     // Close gracefully so Chrome flushes cookies back into the profile; a killed
@@ -140,6 +172,10 @@ pub async fn serve() -> Result<()> {
     }
 
     trace_shutdown!("browser closed, exiting");
+
+    if is_http {
+        return outcome;
+    }
 
     // Both paths exit explicitly rather than returning. Returning hands control back to
     // the runtime, which waits on tokio's blocking stdin reader -- and that read does not

@@ -228,6 +228,104 @@ so the server itself starts instantly.
 
 </details>
 
+## Remote clients (Streamable HTTP)
+
+**HTTP does not replace interactive K-Plussa login.** The human must sign in to
+the browser running on the server, and the server must retain that browser's
+profile. Requests still execute inside Chrome with its saved cookies. An expired
+session needs another human login. A cloud deployment therefore needs a private
+interactive browser access path as well as MCP ingress; this transport does not
+provide a remote browser viewer or automate credentials/MFA.
+
+The default remains stdio. To serve MCP over HTTP instead:
+
+```sh
+k-ruoka-mcp serve --transport streamable-http --host 127.0.0.1 --port 8080
+```
+
+`POST /mcp` uses the SDK's stateless transport and JSON responses. It does not issue
+an MCP session id or offer a standalone GET/SSE stream. Each request shares the
+same account, browser, login flow and default store. Disconnecting a client does
+not stop the server. After a replica restart, clients can initialize again without
+depending on an old in-memory transport session.
+
+`GET /healthz` returns 200 without opening Chrome or checking whether K-Ruoka is
+signed in. Use it for process readiness/liveness, not account authentication.
+
+| Option | Environment variable | Default |
+| --- | --- | --- |
+| `--host` | `K_RUOKA_HTTP_HOST` | `127.0.0.1` |
+| `--port` | `K_RUOKA_HTTP_PORT` | `8080` |
+| `--allowed-host` (repeatable) | `K_RUOKA_ALLOWED_HOSTS` (comma-separated) | SDK loopback hosts |
+| `--allowed-origin` (repeatable) | `K_RUOKA_ALLOWED_ORIGINS` (comma-separated) | Reject every present Origin |
+
+The Host allowlist is independent of the bind address: binding to `0.0.0.0` does
+not permit arbitrary Host headers. Set the hostname/authority forwarded by your
+proxy explicitly. Origins match exact strings; requests without Origin are
+accepted, as is normal for server-to-server MCP clients. These checks do not
+authenticate a caller.
+
+### Docker and public HTTPS
+
+For local testing, build the image and publish only to loopback:
+
+```sh
+docker build -f docker/Dockerfile -t k-ruoka-mcp:http .
+docker run --rm \
+  -v k-ruoka-profile:/home/k-ruoka/.local/share/k-ruoka-mcp \
+  -p 127.0.0.1:8080:8080 \
+  k-ruoka-mcp:http serve --transport streamable-http --host 0.0.0.0
+```
+
+For ChatGPT or another remote client, put the listener behind an HTTPS proxy with
+MCP-compatible authorization (including OAuth discovery where the client requires
+it). This server implements transport, **not an OAuth authorization server**. The
+proxy must validate every MCP request, preserve the MCP protocol headers and
+forward only to a private backend. Do not expose the unauthenticated listener
+directly to the internet. A browser login redirect or K-Plussa cookie does not
+authenticate an MCP caller.
+
+Allow the backend Host that the proxy forwards, for example
+`--allowed-host cart.example.com`, or the private backend authority if the proxy
+rewrites Host. Keep the backend unreachable except through the authenticated
+proxy. ChatGPT should be configured with the proxy's public HTTPS `/mcp` URL.
+
+### Azure Container Apps and scale-to-zero
+
+Use a regular Container App with HTTP ingress, not a Container Apps job. Configure
+the container with the explicit HTTP command above, target port 8080,
+`minReplicas: 0`, `maxReplicas: 1`, and `/healthz` startup/readiness/liveness probes.
+Keep ingress private behind the authenticated HTTPS proxy. An HTTP request can
+activate the app from zero replicas; an external VM-start operation is unnecessary.
+`K_RUOKA_IDLE_TIMEOUT_SECS` only closes Chrome; Azure controls replica scale-down.
+
+The browser profile and persisted default store must survive replica replacement.
+Mount secure persistent storage at
+`/home/k-ruoka/.local/share/k-ruoka-mcp`, with access for runtime UID 1000. Container
+and replica temporary storage disappear on scale-down. Validate the chosen
+filesystem's Chrome profile locking, permissions and cookie persistence before
+using a real account; an Azure Files mount alone is not evidence of compatibility.
+
+Only one process may own a profile. A maximum of one replica is not sufficient to
+prevent overlap between old/new revisions during deployment: stop the old owner
+before starting the new one, or provide external ownership coordination. Do not
+share this backend among different users or accounts.
+
+Provision or renew K-Plussa login through a private administrative path using the
+existing login workflow, stopping any other process that owns the profile. Port
+9222 is an unauthenticated browser control channel, never a public MCP endpoint.
+The login instructions' SSH/container hostname is not automatically a reachable
+Azure host; private login access must be arranged separately.
+
+Local hermetic tests cover HTTP protocol behavior and shutdown. Azure cold-start
+latency, profile persistence on the selected volume, login access, idle scale-down
+and end-to-end ChatGPT/OAuth connectivity require deployment validation. This
+repository does not provision those resources or claim that validation has run.
+
+References: [Azure HTTP scaling](https://learn.microsoft.com/en-us/azure/container-apps/scale-app),
+[storage mounts](https://learn.microsoft.com/en-us/azure/container-apps/storage-mounts),
+and [OpenAI remote MCP setup](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+
 ## Tools
 
 Every cart tool takes a `store_id`, because a cart belongs to a store (e.g. `N137` is
