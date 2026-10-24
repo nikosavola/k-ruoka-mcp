@@ -290,6 +290,14 @@ Allow the backend Host that the proxy forwards, for example
 rewrites Host. Keep the backend unreachable except through the authenticated
 proxy. ChatGPT should be configured with the proxy's public HTTPS `/mcp` URL.
 
+For a private household deployment, authorize an explicit allowlist of individual
+family identities at the gateway. Verify each token's signature, issuer, audience,
+expiry and permissions before forwarding any MCP request. A request being sent by
+ChatGPT does not establish which person may use the account. The browser control
+channel needs its own protected administrative access; MCP authorization does not
+automatically protect port 9222. No credentials or cookies belong in MCP tool
+arguments or responses.
+
 ### Azure Container Apps and scale-to-zero
 
 Use a regular Container App with HTTP ingress, not a Container Apps job. Configure
@@ -309,13 +317,16 @@ using a real account; an Azure Files mount alone is not evidence of compatibilit
 Only one process may own a profile. A maximum of one replica is not sufficient to
 prevent overlap between old/new revisions during deployment: stop the old owner
 before starting the new one, or provide external ownership coordination. Do not
-share this backend among different users or accounts.
+use this backend as a service with separate K-Ruoka accounts for different users.
+All authorized callers share the one configured K-Ruoka account and cart state.
 
 Provision or renew K-Plussa login through a private administrative path using the
 existing login workflow, stopping any other process that owns the profile. Port
 9222 is an unauthenticated browser control channel, never a public MCP endpoint.
 The login instructions' SSH/container hostname is not automatically a reachable
 Azure host; private login access must be arranged separately.
+Keep the replica running throughout an interactive login, for example by
+temporarily setting `minReplicas: 1` and restoring zero after login finishes.
 
 Local hermetic tests cover HTTP protocol behavior and shutdown. Azure cold-start
 latency, profile persistence on the selected volume, login access, idle scale-down
@@ -325,6 +336,7 @@ repository does not provision those resources or claim that validation has run.
 References: [Azure HTTP scaling](https://learn.microsoft.com/en-us/azure/container-apps/scale-app),
 [storage mounts](https://learn.microsoft.com/en-us/azure/container-apps/storage-mounts),
 and [OpenAI remote MCP setup](https://developers.openai.com/plugins/deploy/connect-chatgpt).
+See also [MCP authorization requirements](https://developers.openai.com/plugins/build/auth).
 
 ## Tools
 
