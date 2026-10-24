@@ -50,6 +50,9 @@ ENV K_RUOKA_CHROME=/usr/bin/chromium
 # Docker host's loopback to reach a login started by the start_login tool.
 ENV K_RUOKA_DEBUG_PORT=9222
 
+# Opt-in Streamable HTTP; stdio remains the default command.
+EXPOSE 8080
+
 # tini as PID 1: Chromium is a multi-process app, and something has to reap the zombies
 # its child processes leave behind since the container has no init of its own.
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]

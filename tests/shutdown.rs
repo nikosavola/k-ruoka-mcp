@@ -41,6 +41,82 @@ fn scratch_profile(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("k-ruoka-shutdown-test-{name}"))
 }
 
+/// No stdin and no Chrome are needed to serve HTTP metadata or shut down cleanly.
+#[cfg(unix)]
+#[test]
+fn http_without_stdin_serves_health_and_handles_sigterm() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            self.0.kill().ok();
+            self.0.wait().ok();
+        }
+    }
+
+    let profile = scratch_profile(&format!("http-{}", std::process::id()));
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_k-ruoka-mcp"))
+            .args(["serve", "--transport", "streamable-http", "--port", "0"])
+            .env("K_RUOKA_PROFILE", &profile)
+            .env("K_RUOKA_CHROME", "/no-such-k-ruoka-test-browser")
+            .env("K_RUOKA_HTTP_HOST", "127.0.0.1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = drain(child.0.stdout.take().unwrap(), "stdout");
+    let stderr = drain(child.0.stderr.take().unwrap(), "stderr");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let address = loop {
+        let log = stderr.lock().unwrap().clone();
+        if let Some(address) = log
+            .lines()
+            .find_map(|line| line.strip_prefix("stderr: k-ruoka-mcp: HTTP listening on "))
+        {
+            break address.to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "HTTP listener did not start: {log}"
+        );
+        assert!(child.0.try_wait().unwrap().is_none(), "HTTP exited: {log}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut stream = TcpStream::connect(&address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    write!(
+        stream,
+        "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    Command::new("kill")
+        .args(["-TERM", &child.0.id().to_string()])
+        .status()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            assert_eq!(status.code(), Some(0), "{}", stderr.lock().unwrap());
+            break;
+        }
+        assert!(Instant::now() < deadline, "HTTP did not exit after SIGTERM");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(stdout.lock().unwrap().is_empty());
+    assert!(!stderr.lock().unwrap().contains("launched browser"));
+    let _ = std::fs::remove_dir_all(profile);
+}
+
 /// Send `signal` to a running `serve` and return how it exited.
 ///
 /// `handshake` chooses whether the client has completed `initialize` first. Both
